@@ -434,7 +434,10 @@
       <div class="panel">
         <div class="toolbar">
           <h2 style="margin:0;">Monthly Expenses</h2>
-          <button class="btn" onclick="openExpenseModal('monthly')">+ Add Expense</button>
+          <div class="filters">
+            <button class="btn-ghost btn" onclick="clearExpenses('monthly')">Clear All</button>
+            <button class="btn" onclick="openExpenseModal('monthly')">+ Add Expense</button>
+          </div>
         </div>
         <div id="monthlyExpenseTable"></div>
       </div>
@@ -442,7 +445,10 @@
       <div class="panel">
         <div class="toolbar">
           <h2 style="margin:0;">Biweekly Card Expenses</h2>
-          <button class="btn" onclick="openExpenseModal('biweekly')">+ Add Expense</button>
+          <div class="filters">
+            <button class="btn-ghost btn" onclick="clearExpenses('biweekly')">Clear All</button>
+            <button class="btn" onclick="openExpenseModal('biweekly')">+ Add Expense</button>
+          </div>
         </div>
         <div id="biweeklyExpenseTable"></div>
       </div>
@@ -1091,6 +1097,15 @@ window.editExpense = (id) => {
   window.openExpenseModal(e.frequency, e);
 };
 window.deleteExpense = (id) => deleteRow('expenses', id);
+
+window.clearExpenses = async function (frequency) {
+  const rows = expenses.filter(e => e.frequency === frequency);
+  if (rows.length === 0) { alert(`No ${frequency} expenses to clear.`); return; }
+  if (!confirm(`Delete all ${rows.length} ${frequency} expense(s)? This can't be undone.`)) return;
+  const batch = writeBatch(db);
+  rows.forEach(e => batch.delete(doc(db, 'expenses', e.id)));
+  await batch.commit();
+};
 
 function expenseTableHTML(rows, frequency, tableKey, renderFn) {
   if (rows.length === 0) return `<div class="empty-state">No ${frequency} expenses yet.</div>`;
