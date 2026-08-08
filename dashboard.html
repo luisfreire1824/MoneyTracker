@@ -1,0 +1,1301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Household Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@400;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --ink:#1C2430;
+    --ink-soft:#5B6472;
+    --paper:#EEEBE2;
+    --paper-raised:#F8F6F0;
+    --line:#D6D0C0;
+    --brass:#A8763E;
+    --brass-dark:#8A5F2E;
+    --green:#34513A;
+    --green-bg:#E4EBE1;
+    --rust:#8C3B2E;
+    --rust-bg:#F1E2DC;
+    --mono:'IBM Plex Mono',monospace;
+    --slab:'Zilla Slab',serif;
+    --sans:'Inter',sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family:var(--sans);
+    color:var(--ink);
+    background-color:var(--paper);
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size:28px 28px;
+    background-attachment:fixed;
+    min-height:100vh;
+  }
+  ::selection{background:var(--brass);color:#fff;}
+
+  /* ---------- masthead ---------- */
+  header.masthead{
+    background:var(--ink);
+    color:var(--paper);
+    padding:18px 24px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    border-bottom:4px solid var(--brass);
+  }
+  header.masthead .title{
+    font-family:var(--slab);
+    font-weight:700;
+    font-size:22px;
+    letter-spacing:.3px;
+    display:flex;
+    align-items:baseline;
+    gap:10px;
+  }
+  header.masthead .title small{
+    font-family:var(--sans);
+    font-weight:400;
+    font-size:12px;
+    color:#B9C2CE;
+    text-transform:uppercase;
+    letter-spacing:1.5px;
+  }
+  header.masthead button{
+    background:none;
+    border:1px solid #3A4454;
+    color:var(--paper);
+    font-family:var(--sans);
+    font-size:12px;
+    padding:7px 14px;
+    border-radius:3px;
+    cursor:pointer;
+  }
+  header.masthead button:hover{border-color:var(--brass);color:var(--brass);}
+
+  /* ---------- login ---------- */
+  #loginScreen{
+    max-width:380px;
+    margin:12vh auto;
+    background:var(--paper-raised);
+    border:1px solid var(--line);
+    border-top:4px solid var(--brass);
+    padding:32px;
+    border-radius:4px;
+  }
+  #loginScreen h1{
+    font-family:var(--slab);
+    font-size:24px;
+    margin:0 0 4px;
+  }
+  #loginScreen p.sub{
+    color:var(--ink-soft);
+    font-size:13px;
+    margin:0 0 24px;
+  }
+  #loginScreen label{
+    display:block;
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:1px;
+    color:var(--ink-soft);
+    margin-bottom:5px;
+  }
+  #loginScreen input{
+    width:100%;
+    padding:10px 12px;
+    margin-bottom:16px;
+    border:1px solid var(--line);
+    border-radius:3px;
+    background:#fff;
+    font-family:var(--sans);
+    font-size:14px;
+  }
+  #loginError{
+    color:var(--rust);
+    font-size:12px;
+    margin-bottom:12px;
+    min-height:14px;
+  }
+
+  /* ---------- tabs ---------- */
+  nav.tabs{
+    display:flex;
+    gap:4px;
+    padding:16px 24px 0;
+    overflow-x:auto;
+  }
+  nav.tabs button{
+    font-family:var(--slab);
+    font-weight:600;
+    font-size:14px;
+    background:var(--paper);
+    color:var(--ink-soft);
+    border:1px solid var(--line);
+    border-bottom:none;
+    padding:10px 20px;
+    border-radius:6px 6px 0 0;
+    cursor:pointer;
+    white-space:nowrap;
+    position:relative;
+    top:1px;
+  }
+  nav.tabs button.active{
+    background:var(--paper-raised);
+    color:var(--ink);
+    border-bottom:1px solid var(--paper-raised);
+  }
+
+  main{
+    max-width:1180px;
+    margin:0 auto;
+    padding:24px;
+  }
+  .panel{
+    background:var(--paper-raised);
+    border:1px solid var(--line);
+    border-radius:0 4px 4px 4px;
+    padding:24px;
+    margin-bottom:24px;
+  }
+  .panel h2{
+    font-family:var(--slab);
+    font-size:19px;
+    margin:0 0 4px;
+  }
+  .panel .panel-sub{
+    color:var(--ink-soft);
+    font-size:12.5px;
+    margin:0 0 18px;
+  }
+  .tab-content{display:none;}
+  .tab-content.active{display:block;}
+
+  /* ---------- summary cards ---------- */
+  .card-row{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+    gap:14px;
+    margin-bottom:24px;
+  }
+  .stat-card{
+    background:var(--paper-raised);
+    border:1px solid var(--line);
+    border-top:3px solid var(--brass);
+    border-radius:0 3px 3px 3px;
+    padding:16px 18px;
+  }
+  .stat-card.negative{border-top-color:var(--rust);}
+  .stat-card.positive{border-top-color:var(--green);}
+  .stat-card .label{
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:1px;
+    color:var(--ink-soft);
+    margin-bottom:6px;
+  }
+  .stat-card .value{
+    font-family:var(--mono);
+    font-variant-numeric:tabular-nums;
+    font-size:24px;
+    font-weight:600;
+  }
+
+  /* ---------- stamp ---------- */
+  .stamp{
+    display:inline-block;
+    font-family:var(--slab);
+    text-transform:uppercase;
+    font-size:10.5px;
+    letter-spacing:1px;
+    font-weight:700;
+    border:2px solid var(--rust);
+    color:var(--rust);
+    padding:2px 8px;
+    border-radius:3px;
+    transform:rotate(-3deg);
+    background:var(--rust-bg);
+  }
+  .stamp.brass{border-color:var(--brass-dark);color:var(--brass-dark);background:#F3E9D8;}
+  .stamp.green{border-color:var(--green);color:var(--green);background:var(--green-bg);}
+
+  /* ---------- tables ---------- */
+  table.ledger{
+    width:100%;
+    border-collapse:collapse;
+    font-size:13.5px;
+  }
+  table.ledger th{
+    background:var(--ink);
+    color:var(--paper);
+    text-align:left;
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:.6px;
+    padding:9px 12px;
+    font-weight:600;
+    cursor:pointer;
+    user-select:none;
+  }
+  table.ledger th:hover{color:var(--brass);}
+  table.ledger td{
+    padding:9px 12px;
+    border-bottom:1px solid var(--line);
+  }
+  table.ledger tbody tr:nth-child(even){background:rgba(214,208,192,.18);}
+  table.ledger td.num, table.ledger th.num{
+    font-family:var(--mono);
+    font-variant-numeric:tabular-nums;
+    text-align:right;
+  }
+  table.ledger tbody tr:hover{background:rgba(168,118,62,.08);}
+  .row-actions{white-space:nowrap;}
+  .row-actions button{
+    background:none;border:none;cursor:pointer;color:var(--ink-soft);font-size:12px;margin-right:8px;
+  }
+  .row-actions button:hover{color:var(--brass-dark);}
+
+  /* ---------- buttons ---------- */
+  .btn{
+    font-family:var(--sans);
+    font-weight:600;
+    font-size:13px;
+    padding:9px 16px;
+    border-radius:3px;
+    border:1px solid var(--brass);
+    background:var(--brass);
+    color:#fff;
+    cursor:pointer;
+  }
+  .btn:hover{background:var(--brass-dark);border-color:var(--brass-dark);}
+  .btn-ghost{
+    background:none;
+    color:var(--ink);
+    border:1px solid var(--line);
+  }
+  .btn-ghost:hover{border-color:var(--ink-soft);}
+  .toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px;flex-wrap:wrap;}
+  .toolbar .filters{display:flex;gap:8px;flex-wrap:wrap;}
+  select, input[type=text], input[type=number], input[type=date], textarea{
+    font-family:var(--sans);
+    font-size:13px;
+    padding:7px 10px;
+    border:1px solid var(--line);
+    border-radius:3px;
+    background:#fff;
+    color:var(--ink);
+  }
+
+  /* ---------- modal ---------- */
+  .modal-backdrop{
+    display:none;
+    position:fixed;inset:0;
+    background:rgba(28,36,48,.55);
+    align-items:center;justify-content:center;
+    z-index:50;
+    padding:20px;
+  }
+  .modal-backdrop.active{display:flex;}
+  .modal{
+    background:var(--paper-raised);
+    border-top:4px solid var(--brass);
+    border-radius:0 4px 4px 4px;
+    padding:26px;
+    width:100%;
+    max-width:460px;
+    max-height:88vh;
+    overflow-y:auto;
+  }
+  .modal h3{font-family:var(--slab);margin:0 0 16px;font-size:18px;}
+  .field{margin-bottom:14px;}
+  .field label{
+    display:block;
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:.6px;
+    color:var(--ink-soft);
+    margin-bottom:5px;
+  }
+  .field input, .field select, .field textarea{width:100%;}
+  .field.checkbox{display:flex;align-items:center;gap:8px;}
+  .field.checkbox input{width:auto;}
+  .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px;}
+
+  .empty-state{
+    text-align:center;
+    padding:36px 20px;
+    color:var(--ink-soft);
+    font-size:13.5px;
+  }
+
+  @media (max-width:640px){
+    main{padding:14px;}
+    .panel{padding:16px;}
+    header.masthead{padding:14px 16px;}
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<div id="loginScreen">
+  <h1>Household Ledger</h1>
+  <p class="sub">Shared account &mdash; sign in with the household login.</p>
+  <label for="loginEmail">Email</label>
+  <input type="email" id="loginEmail" autocomplete="username">
+  <label for="loginPassword">Password</label>
+  <input type="password" id="loginPassword" autocomplete="current-password">
+  <div id="loginError"></div>
+  <button class="btn" style="width:100%" onclick="handleLogin()">Sign in</button>
+</div>
+
+<!-- ============ APP SHELL ============ -->
+<div id="appShell" style="display:none;">
+  <header class="masthead">
+    <div class="title">Household Ledger <small>shared account</small></div>
+    <button onclick="handleLogout()">Sign out</button>
+  </header>
+
+  <nav class="tabs" id="tabNav">
+    <button data-tab="dashboard" class="active">Dashboard</button>
+    <button data-tab="debt">Debt &amp; Cards</button>
+    <button data-tab="money">Income &amp; Expenses</button>
+    <button data-tab="projects">Projects</button>
+    <button data-tab="import">Import Data</button>
+  </nav>
+
+  <main>
+    <!-- ---------- DASHBOARD ---------- -->
+    <section id="tab-dashboard" class="tab-content active">
+      <div class="card-row" id="dashboardCards"></div>
+
+      <div class="panel">
+        <h2>Debt Paydown Plan</h2>
+        <p class="panel-sub">Hybrid strategy: highest-APR debt gets extra payments first, except 0% promo balances expiring within 3 months, which jump the queue so they clear before the rate flips.</p>
+        <div class="toolbar">
+          <div class="filters">
+            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Extra $/month:
+              <input type="number" id="monthlyExtraInput" style="width:100px;margin-left:6px;" value="0">
+            </label>
+            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Split to debt:
+              <input type="range" id="splitRatioInput" min="0" max="100" value="70" style="vertical-align:middle;">
+              <span id="splitRatioLabel">70%</span>
+            </label>
+          </div>
+          <button class="btn-ghost btn" onclick="saveSettings()">Save</button>
+        </div>
+        <div id="debtPlanTable"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Balance History</h2>
+        <p class="panel-sub">Trend across all cards and loans.</p>
+        <canvas id="balanceChart" height="90"></canvas>
+      </div>
+    </section>
+
+    <!-- ---------- DEBT & CARDS ---------- -->
+    <section id="tab-debt" class="tab-content">
+      <div class="panel">
+        <div class="toolbar">
+          <h2 style="margin:0;">Cards &amp; Loans</h2>
+          <button class="btn" onclick="openAccountModal()">+ Add Account</button>
+        </div>
+        <p class="panel-sub">Metadata for every card, consolidation-program balance, and student loan.</p>
+        <div id="accountsTable"></div>
+      </div>
+
+      <div class="panel">
+        <div class="toolbar">
+          <h2 style="margin:0;">Balance History Log</h2>
+          <button class="btn" onclick="openBalanceHistoryModal()">+ Add Entry</button>
+        </div>
+        <p class="panel-sub">Per-payment balance tracking, one row per statement/payment.</p>
+        <div id="balanceHistoryTable"></div>
+      </div>
+    </section>
+
+    <!-- ---------- INCOME & EXPENSES ---------- -->
+    <section id="tab-money" class="tab-content">
+      <div class="panel">
+        <div class="toolbar">
+          <h2 style="margin:0;">Income</h2>
+          <button class="btn" onclick="openIncomeModal()">+ Add Income</button>
+        </div>
+        <div id="incomeTable"></div>
+      </div>
+
+      <div class="panel">
+        <div class="toolbar">
+          <h2 style="margin:0;">Monthly Expenses</h2>
+          <button class="btn" onclick="openExpenseModal('monthly')">+ Add Expense</button>
+        </div>
+        <div id="monthlyExpenseTable"></div>
+      </div>
+
+      <div class="panel">
+        <div class="toolbar">
+          <h2 style="margin:0;">Biweekly Card Expenses</h2>
+          <button class="btn" onclick="openExpenseModal('biweekly')">+ Add Expense</button>
+        </div>
+        <div id="biweeklyExpenseTable"></div>
+      </div>
+    </section>
+
+    <!-- ---------- PROJECTS ---------- -->
+    <section id="tab-projects" class="tab-content">
+      <div class="panel">
+        <div class="toolbar">
+          <h2 style="margin:0;">House Projects</h2>
+          <button class="btn" onclick="openProjectModal()">+ Add Project</button>
+        </div>
+        <p class="panel-sub">Sort by any column. No formula &mdash; you and Bibi call the priority.</p>
+        <div class="toolbar">
+          <div class="filters">
+            <select id="projectStatusFilter" onchange="renderProjects()">
+              <option value="all">All statuses</option>
+              <option value="idea">Idea</option>
+              <option value="planned">Planned</option>
+              <option value="in-progress">In progress</option>
+              <option value="done">Done</option>
+            </select>
+          </div>
+        </div>
+        <div id="projectsTable"></div>
+      </div>
+    </section>
+
+    <!-- ---------- IMPORT ---------- -->
+    <section id="tab-import" class="tab-content">
+      <div class="panel">
+        <h2>Import from Excel/CSV</h2>
+        <p class="panel-sub">Upload a sheet, map its columns to the right fields, review, then confirm.</p>
+        <div class="field">
+          <label>What are you importing?</label>
+          <select id="importTarget">
+            <option value="account">Card / Loan metadata</option>
+            <option value="balanceHistory">Balance history</option>
+            <option value="income">Income</option>
+            <option value="expenseMonthly">Monthly expenses</option>
+            <option value="expenseBiweekly">Biweekly card expenses</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>File</label>
+          <input type="file" id="importFile" accept=".xlsx,.xls,.csv">
+        </div>
+        <div id="importMapping"></div>
+        <div id="importPreview"></div>
+        <button class="btn" id="importConfirmBtn" style="display:none;" onclick="confirmImport()">Confirm Import</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ============ MODAL (generic, reused per form) ============ -->
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal">
+    <h3 id="modalTitle">Edit</h3>
+    <div id="modalFields"></div>
+    <div class="modal-actions">
+      <button class="btn-ghost btn" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="modalSaveBtn">Save</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+/* ============================================================
+   FIREBASE SETUP — READ BEFORE RUNNING
+   1. Create a project at https://console.firebase.google.com
+   2. Build > Authentication > Sign-in method > enable Email/Password
+   3. Authentication > Users > Add user — create ONE user for you
+      and Bibi to share (one email/password, both of you use it).
+   4. Build > Firestore Database > Create database (production mode)
+   5. Firestore > Rules — paste this, then Publish:
+
+      rules_version = '2';
+      service cloud.firestore {
+        match /databases/{database}/documents {
+          match /{document=**} {
+            allow read, write: if request.auth != null;
+          }
+        }
+      }
+
+      This restricts ALL data to whoever is signed in with your one
+      shared account. Nobody else can read or write anything.
+   6. Project settings (gear icon) > General > Your apps > Web app
+      > copy the config object into firebaseConfig below.
+   ============================================================ */
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import {
+  getFirestore, collection, doc, addDoc, updateDoc, deleteDoc,
+  onSnapshot, setDoc, getDoc, writeBatch
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAlXh1jAFDVO4W_EJW6aeC42kYwY7z25gE",
+  authDomain: "household-ledger-95459.firebaseapp.com",
+  projectId: "household-ledger-95459",
+  storageBucket: "household-ledger-95459.firebasestorage.app",
+  messagingSenderId: "836650986020",
+  appId: "1:836650986020:web:ffb7582309003e560186b1"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+/* ---------------- STATE ---------------- */
+let accounts = [];
+let balanceHistory = [];
+let income = [];
+let expenses = [];       // { item, amount, frequency: 'monthly'|'biweekly' }
+let projects = [];
+let settings = { monthlyExtra: 0, splitRatio: 70 };
+
+let unsubs = [];
+let sortState = {}; // per-table current sort {key, dir}
+
+/* ---------------- AUTH ---------------- */
+window.handleLogin = async function () {
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const errEl = document.getElementById('loginError');
+  errEl.textContent = '';
+  try {
+    await signInWithEmailAndPassword(auth, email, password);
+  } catch (e) {
+    errEl.textContent = 'Sign-in failed — check email and password.';
+  }
+};
+
+window.handleLogout = async function () {
+  unsubs.forEach(u => u());
+  unsubs = [];
+  await signOut(auth);
+};
+
+onAuthStateChanged(auth, (user) => {
+  if (user) {
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('appShell').style.display = 'block';
+    startListeners();
+  } else {
+    document.getElementById('loginScreen').style.display = 'block';
+    document.getElementById('appShell').style.display = 'none';
+  }
+});
+
+/* ---------------- FIRESTORE LISTENERS ---------------- */
+function startListeners() {
+  unsubs.push(onSnapshot(collection(db, 'accounts'), snap => {
+    accounts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderAccounts(); renderDashboard(); renderBalanceChart(); populateAccountSelects();
+  }));
+  unsubs.push(onSnapshot(collection(db, 'balanceHistory'), snap => {
+    balanceHistory = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderBalanceHistory(); renderBalanceChart();
+  }));
+  unsubs.push(onSnapshot(collection(db, 'income'), snap => {
+    income = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderIncome(); renderDashboard();
+  }));
+  unsubs.push(onSnapshot(collection(db, 'expenses'), snap => {
+    expenses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderExpenses(); renderDashboard();
+  }));
+  unsubs.push(onSnapshot(collection(db, 'projects'), snap => {
+    projects = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderProjects(); renderDashboard();
+  }));
+  getDoc(doc(db, 'settings', 'main')).then(snap => {
+    if (snap.exists()) {
+      settings = snap.data();
+      document.getElementById('monthlyExtraInput').value = settings.monthlyExtra || 0;
+      document.getElementById('splitRatioInput').value = settings.splitRatio ?? 70;
+      document.getElementById('splitRatioLabel').textContent = (settings.splitRatio ?? 70) + '%';
+      renderDashboard();
+    }
+  });
+}
+
+window.saveSettings = async function () {
+  settings.monthlyExtra = Number(document.getElementById('monthlyExtraInput').value) || 0;
+  settings.splitRatio = Number(document.getElementById('splitRatioInput').value);
+  await setDoc(doc(db, 'settings', 'main'), settings);
+  renderDashboard();
+};
+
+document.getElementById('splitRatioInput').addEventListener('input', (e) => {
+  document.getElementById('splitRatioLabel').textContent = e.target.value + '%';
+});
+
+/* ---------------- TAB NAV ---------------- */
+document.getElementById('tabNav').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-tab]');
+  if (!btn) return;
+  document.querySelectorAll('#tabNav button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.tab-content').forEach(s => s.classList.remove('active'));
+  document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+});
+
+/* ---------------- FORMAT HELPERS ---------------- */
+const fmtMoney = (n) => (n < 0 ? '-$' : '$') + Math.abs(Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+function monthlyEquivalent(amount, frequency) {
+  switch (frequency) {
+    case 'weekly': return amount * 4.33;
+    case 'biweekly': return amount * 2.166;
+    case 'monthly': return amount;
+    case 'yearly': return amount / 12;
+    default: return amount;
+  }
+}
+
+/* ---------------- DEBT PAYDOWN RECOMMENDER ---------------- */
+// Hybrid avalanche: rank by APR (highest first), but pull any account
+// with a 0% promo APR ending within PULL_FORWARD_DAYS to the FRONT of
+// the line so it's cleared (or close to it) before the rate flips.
+const PULL_FORWARD_DAYS = 90;
+
+function computeDebtPlan(extraAmount) {
+  const today = new Date();
+  const enriched = accounts.map(a => {
+    const balance = Number(a.balance) || 0;
+    const minPayment = Number(a.minPayment) || 0;
+    const normalAPR = Number(a.normalAPR) || 0;
+    let promoActive = false, daysLeft = null;
+    if (a.promoAPRDate) {
+      const end = new Date(a.promoAPRDate + 'T00:00:00');
+      daysLeft = Math.round((end - today) / 86400000);
+      promoActive = daysLeft > 0;
+    }
+    return { ...a, balance, minPayment, normalAPR, promoActive, daysLeft };
+  }).filter(a => a.balance > 0);
+
+  const urgentPromo = enriched.filter(a => a.promoActive && a.daysLeft <= PULL_FORWARD_DAYS)
+    .sort((a, b) => a.daysLeft - b.daysLeft);
+  const byAPR = enriched.filter(a => !a.promoActive)
+    .sort((a, b) => b.normalAPR - a.normalAPR);
+  const safePromo = enriched.filter(a => a.promoActive && a.daysLeft > PULL_FORWARD_DAYS)
+    .sort((a, b) => a.daysLeft - b.daysLeft);
+
+  const order = [...urgentPromo, ...byAPR, ...safePromo];
+
+  let remaining = Number(extraAmount) || 0;
+  return order.map((a, i) => {
+    const room = Math.max(a.balance - a.minPayment, 0);
+    const alloc = Math.max(Math.min(remaining, room), 0);
+    remaining -= alloc;
+    let reason;
+    if (a.promoActive && a.daysLeft <= PULL_FORWARD_DAYS) reason = `0% APR ends in ${a.daysLeft}d`;
+    else if (a.promoActive) reason = `0% APR — safe until ${fmtDate(a.promoAPRDate)}`;
+    else reason = `${a.normalAPR}% APR`;
+    return { ...a, extraAllocation: alloc, rank: i + 1, reason };
+  });
+}
+
+/* ---------------- DASHBOARD ---------------- */
+function renderDashboard() {
+  const totalDebt = accounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
+  const totalMinPayments = accounts.reduce((s, a) => s + (Number(a.minPayment) || 0), 0);
+  const totalIncome = income.reduce((s, i) => s + monthlyEquivalent(Number(i.amount) || 0, i.frequency), 0);
+  const totalExpenses = expenses.reduce((s, e) => s + monthlyEquivalent(Number(e.amount) || 0, e.frequency), 0);
+  const netFree = totalIncome - totalExpenses - totalMinPayments;
+  const projectsBudgeted = projects.reduce((s, p) => s + (Number(p.budgetAllocated) || 0), 0);
+  const projectsSpent = projects.reduce((s, p) => s + (Number(p.budgetSpent) || 0), 0);
+
+  const cards = document.getElementById('dashboardCards');
+  cards.innerHTML = `
+    <div class="stat-card negative">
+      <div class="label">Total Debt</div>
+      <div class="value">${fmtMoney(totalDebt)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Monthly Income</div>
+      <div class="value">${fmtMoney(totalIncome)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Monthly Expenses</div>
+      <div class="value">${fmtMoney(totalExpenses)}</div>
+    </div>
+    <div class="stat-card ${netFree >= 0 ? 'positive' : 'negative'}">
+      <div class="label">Free Cash / Mo.</div>
+      <div class="value">${fmtMoney(netFree)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Projects Budgeted</div>
+      <div class="value">${fmtMoney(projectsBudgeted)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Projects Spent</div>
+      <div class="value">${fmtMoney(projectsSpent)}</div>
+    </div>
+  `;
+
+  const extra = Number(document.getElementById('monthlyExtraInput').value) || settings.monthlyExtra || 0;
+  const splitRatio = Number(document.getElementById('splitRatioInput').value) || settings.splitRatio || 70;
+  const debtExtra = extra * (splitRatio / 100);
+  const projectExtra = extra - debtExtra;
+
+  const plan = computeDebtPlan(debtExtra);
+  const planEl = document.getElementById('debtPlanTable');
+  if (plan.length === 0) {
+    planEl.innerHTML = `<div class="empty-state">Add a card or loan with a balance to see a paydown plan.</div>`;
+  } else {
+    planEl.innerHTML = `
+      <p style="font-size:13px;color:var(--ink-soft);margin:0 0 12px;">
+        Of your $${extra.toFixed(0)}/mo extra: <strong>${fmtMoney(debtExtra)}</strong> to debt,
+        <strong>${fmtMoney(projectExtra)}</strong> to project savings.
+      </p>
+      <table class="ledger">
+        <thead><tr>
+          <th>Priority</th><th>Account</th><th>Why</th>
+          <th class="num">Balance</th><th class="num">Extra This Month</th>
+        </tr></thead>
+        <tbody>
+          ${plan.map(p => `
+            <tr>
+              <td>${p.rank === 1 ? '<span class="stamp">Pay Extra Here</span>' : p.rank}</td>
+              <td>${p.name || '—'}</td>
+              <td>${p.daysLeft !== null && p.promoActive && p.daysLeft <= PULL_FORWARD_DAYS
+                  ? `<span class="stamp brass">0% Ending Soon</span> ${p.reason}`
+                  : p.reason}</td>
+              <td class="num">${fmtMoney(p.balance)}</td>
+              <td class="num">${fmtMoney(p.extraAllocation)}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+  }
+}
+
+/* ---------------- BALANCE CHART ---------------- */
+let balanceChartInstance = null;
+function renderBalanceChart() {
+  const ctx = document.getElementById('balanceChart');
+  if (!ctx) return;
+  const byAccount = {};
+  balanceHistory
+    .slice()
+    .sort((a, b) => new Date(a.date) - new Date(b.date))
+    .forEach(h => {
+      const acct = accounts.find(a => a.id === h.accountId);
+      const name = acct ? acct.name : 'Unknown';
+      if (!byAccount[name]) byAccount[name] = [];
+      byAccount[name].push({ x: h.date, y: Number(h.balance) || 0 });
+    });
+
+  const palette = ['#A8763E', '#34513A', '#8C3B2E', '#5B6472', '#1C2430', '#B98F5E'];
+  const datasets = Object.keys(byAccount).map((name, i) => ({
+    label: name,
+    data: byAccount[name],
+    borderColor: palette[i % palette.length],
+    backgroundColor: palette[i % palette.length],
+    tension: 0.15,
+    fill: false,
+  }));
+
+  if (balanceChartInstance) balanceChartInstance.destroy();
+  if (datasets.length === 0) return;
+  balanceChartInstance = new Chart(ctx, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      scales: {
+        x: { type: 'time', time: { unit: 'month' }, grid: { color: '#D6D0C0' } },
+        y: { grid: { color: '#D6D0C0' }, ticks: { callback: v => '$' + v.toLocaleString() } }
+      },
+      plugins: { legend: { position: 'bottom', labels: { font: { family: 'Inter' } } } }
+    }
+  });
+}
+
+/* ---------------- SORTING HELPER ---------------- */
+function sortRows(rows, tableKey, defaultKey) {
+  const st = sortState[tableKey] || { key: defaultKey, dir: 1 };
+  sortState[tableKey] = st;
+  return rows.slice().sort((a, b) => {
+    let av = a[st.key], bv = b[st.key];
+    if (typeof av === 'string') av = av.toLowerCase();
+    if (typeof bv === 'string') bv = bv.toLowerCase();
+    if (av === undefined || av === null) av = '';
+    if (bv === undefined || bv === null) bv = '';
+    if (av < bv) return -1 * st.dir;
+    if (av > bv) return 1 * st.dir;
+    return 0;
+  });
+}
+window.toggleSort = function (tableKey, key, renderFn) {
+  const st = sortState[tableKey] || { key, dir: 1 };
+  if (st.key === key) st.dir *= -1; else { st.key = key; st.dir = 1; }
+  sortState[tableKey] = st;
+  renderFn();
+};
+
+function populateAccountSelects() {
+  document.querySelectorAll('.account-select').forEach(sel => {
+    const current = sel.value;
+    sel.innerHTML = accounts.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
+    if (current) sel.value = current;
+  });
+}
+
+/* ============================================================
+   FIELD SCHEMAS — single source of truth for forms + import mapping
+   ============================================================ */
+const ACCOUNT_FIELDS = [
+  { key: 'owner', label: 'Owner', type: 'text' },
+  { key: 'name', label: 'Card / Loan Name', type: 'text' },
+  { key: 'type', label: 'Type', type: 'select', options: ['card', 'consolidation', 'studentloan'] },
+  { key: 'inProgram', label: 'In Consolidation Program', type: 'checkbox' },
+  { key: 'usagePct', label: '% Usage', type: 'number' },
+  { key: 'balance', label: 'Balance', type: 'number' },
+  { key: 'normalAPR', label: 'Normal APR (%)', type: 'number' },
+  { key: 'promoAPRDate', label: '0% APR End Date', type: 'date' },
+  { key: 'creditLimit', label: 'Credit Limit', type: 'number' },
+  { key: 'minPayment', label: 'Minimum Payment', type: 'number' },
+];
+const BALANCE_HISTORY_FIELDS = [
+  { key: 'accountId', label: 'Card / Loan', type: 'accountSelect' },
+  { key: 'date', label: 'Date', type: 'date' },
+  { key: 'balance', label: 'Balance', type: 'number' },
+  { key: 'paymentAmount', label: 'Payment Amount', type: 'number' },
+  { key: 'dueDate', label: 'Due Date', type: 'date' },
+  { key: 'minimumDue', label: 'Minimum Due', type: 'number' },
+  { key: 'newBalance', label: 'New Balance', type: 'number' },
+];
+const INCOME_FIELDS = [
+  { key: 'person', label: 'Person', type: 'text' },
+  { key: 'item', label: 'Item', type: 'text' },
+  { key: 'amount', label: 'Amount', type: 'number' },
+  { key: 'frequency', label: 'Frequency', type: 'select', options: ['weekly', 'biweekly', 'monthly', 'yearly'] },
+];
+const EXPENSE_FIELDS = [
+  { key: 'item', label: 'Item', type: 'text' },
+  { key: 'amount', label: 'Amount', type: 'number' },
+];
+const PROJECT_FIELDS = [
+  { key: 'name', label: 'Project Name', type: 'text' },
+  { key: 'status', label: 'Status', type: 'select', options: ['idea', 'planned', 'in-progress', 'done'] },
+  { key: 'effort', label: 'Effort', type: 'select', options: ['low', 'medium', 'high'] },
+  { key: 'importance', label: 'Importance', type: 'select', options: ['low', 'medium', 'high'] },
+  { key: 'costEstimate', label: 'Cost Estimate', type: 'number' },
+  { key: 'budgetAllocated', label: 'Budget Allocated', type: 'number' },
+  { key: 'budgetSpent', label: 'Budget Spent', type: 'number' },
+  { key: 'notes', label: 'Notes', type: 'textarea' },
+];
+
+/* ============================================================
+   GENERIC MODAL — builds a form from a field schema, saves to
+   the given Firestore collection (create or update by id).
+   ============================================================ */
+let modalContext = null;
+
+function fieldInputHTML(f, value) {
+  const v = value === undefined || value === null ? '' : value;
+  if (f.type === 'select') {
+    return `<select id="f_${f.key}">${f.options.map(o =>
+      `<option value="${o}" ${v === o ? 'selected' : ''}>${o}</option>`).join('')}</select>`;
+  }
+  if (f.type === 'accountSelect') {
+    return `<select id="f_${f.key}" class="account-select">${accounts.map(a =>
+      `<option value="${a.id}" ${v === a.id ? 'selected' : ''}>${a.name}</option>`).join('')}</select>`;
+  }
+  if (f.type === 'checkbox') {
+    return `<input type="checkbox" id="f_${f.key}" ${v ? 'checked' : ''}>`;
+  }
+  if (f.type === 'textarea') {
+    return `<textarea id="f_${f.key}" rows="3">${v}</textarea>`;
+  }
+  return `<input type="${f.type}" id="f_${f.key}" value="${v}">`;
+}
+
+function openModal(title, schema, collectionName, existing, extraFields) {
+  modalContext = { schema, collectionName, existing, extraFields: extraFields || {} };
+  document.getElementById('modalTitle').textContent = title;
+  document.getElementById('modalFields').innerHTML = schema.map(f => `
+    <div class="field ${f.type === 'checkbox' ? 'checkbox' : ''}">
+      ${f.type === 'checkbox' ? '' : `<label for="f_${f.key}">${f.label}</label>`}
+      ${fieldInputHTML(f, existing ? existing[f.key] : '')}
+      ${f.type === 'checkbox' ? `<label for="f_${f.key}" style="margin:0;text-transform:none;">${f.label}</label>` : ''}
+    </div>`).join('');
+  document.getElementById('modalBackdrop').classList.add('active');
+  document.getElementById('modalSaveBtn').onclick = saveModal;
+}
+
+window.closeModal = function () {
+  document.getElementById('modalBackdrop').classList.remove('active');
+  modalContext = null;
+};
+
+async function saveModal() {
+  const { schema, collectionName, existing, extraFields } = modalContext;
+  const data = { ...extraFields };
+  schema.forEach(f => {
+    const el = document.getElementById('f_' + f.key);
+    if (f.type === 'checkbox') data[f.key] = el.checked;
+    else if (f.type === 'number') data[f.key] = el.value === '' ? null : Number(el.value);
+    else data[f.key] = el.value;
+  });
+  if (existing && existing.id) {
+    await updateDoc(doc(db, collectionName, existing.id), data);
+  } else {
+    await addDoc(collection(db, collectionName), data);
+  }
+  closeModal();
+}
+
+async function deleteRow(collectionName, id) {
+  if (!confirm('Delete this entry? This can\'t be undone.')) return;
+  await deleteDoc(doc(db, collectionName, id));
+}
+
+/* ---------------- ACCOUNTS ---------------- */
+window.openAccountModal = function (existing) {
+  openModal(existing ? 'Edit Account' : 'Add Account', ACCOUNT_FIELDS, 'accounts', existing);
+};
+window.editAccount = (id) => window.openAccountModal(accounts.find(a => a.id === id));
+window.deleteAccount = (id) => deleteRow('accounts', id);
+
+function renderAccounts() {
+  const el = document.getElementById('accountsTable');
+  if (accounts.length === 0) { el.innerHTML = `<div class="empty-state">No cards or loans yet. Add one, or import from Excel.</div>`; return; }
+  const rows = sortRows(accounts, 'accounts', 'name');
+  el.innerHTML = `
+    <table class="ledger"><thead><tr>
+      <th onclick="toggleSort('accounts','owner',renderAccounts)">Owner</th>
+      <th onclick="toggleSort('accounts','name',renderAccounts)">Name</th>
+      <th onclick="toggleSort('accounts','type',renderAccounts)">Type</th>
+      <th>Program</th>
+      <th class="num" onclick="toggleSort('accounts','balance',renderAccounts)">Balance</th>
+      <th class="num" onclick="toggleSort('accounts','normalAPR',renderAccounts)">APR</th>
+      <th>0% Until</th>
+      <th class="num">Limit</th>
+      <th></th>
+    </tr></thead><tbody>
+      ${rows.map(a => `
+        <tr>
+          <td>${a.owner || '—'}</td>
+          <td>${a.name || '—'}</td>
+          <td>${a.type || '—'}</td>
+          <td>${a.inProgram ? '<span class="stamp green">In Program</span>' : '—'}</td>
+          <td class="num">${fmtMoney(a.balance)}</td>
+          <td class="num">${a.normalAPR ?? '—'}%</td>
+          <td>${a.promoAPRDate ? fmtDate(a.promoAPRDate) : '—'}</td>
+          <td class="num">${a.creditLimit ? fmtMoney(a.creditLimit) : '—'}</td>
+          <td class="row-actions">
+            <button onclick="editAccount('${a.id}')">Edit</button>
+            <button onclick="deleteAccount('${a.id}')">Delete</button>
+          </td>
+        </tr>`).join('')}
+    </tbody></table>`;
+}
+
+/* ---------------- BALANCE HISTORY ---------------- */
+window.openBalanceHistoryModal = function (existing) {
+  if (accounts.length === 0) { alert('Add a card or loan first.'); return; }
+  openModal(existing ? 'Edit Balance Entry' : 'Add Balance Entry', BALANCE_HISTORY_FIELDS, 'balanceHistory', existing);
+};
+window.editBalanceHistory = (id) => window.openBalanceHistoryModal(balanceHistory.find(h => h.id === id));
+window.deleteBalanceHistory = (id) => deleteRow('balanceHistory', id);
+
+function renderBalanceHistory() {
+  const el = document.getElementById('balanceHistoryTable');
+  if (balanceHistory.length === 0) { el.innerHTML = `<div class="empty-state">No balance history yet.</div>`; return; }
+  const rows = sortRows(balanceHistory, 'balHist', 'date');
+  el.innerHTML = `
+    <table class="ledger"><thead><tr>
+      <th onclick="toggleSort('balHist','date',renderBalanceHistory)">Date</th>
+      <th>Card</th>
+      <th class="num" onclick="toggleSort('balHist','balance',renderBalanceHistory)">Balance</th>
+      <th class="num">Payment</th>
+      <th>Due Date</th>
+      <th class="num">Min Due</th>
+      <th class="num">New Balance</th>
+      <th></th>
+    </tr></thead><tbody>
+      ${rows.map(h => {
+        const acct = accounts.find(a => a.id === h.accountId);
+        return `<tr>
+          <td>${fmtDate(h.date)}</td>
+          <td>${acct ? acct.name : '—'}</td>
+          <td class="num">${fmtMoney(h.balance)}</td>
+          <td class="num">${fmtMoney(h.paymentAmount)}</td>
+          <td>${fmtDate(h.dueDate)}</td>
+          <td class="num">${fmtMoney(h.minimumDue)}</td>
+          <td class="num">${fmtMoney(h.newBalance)}</td>
+          <td class="row-actions">
+            <button onclick="editBalanceHistory('${h.id}')">Edit</button>
+            <button onclick="deleteBalanceHistory('${h.id}')">Delete</button>
+          </td>
+        </tr>`;
+      }).join('')}
+    </tbody></table>`;
+}
+
+/* ---------------- INCOME ---------------- */
+window.openIncomeModal = function (existing) {
+  openModal(existing ? 'Edit Income' : 'Add Income', INCOME_FIELDS, 'income', existing);
+};
+window.editIncome = (id) => window.openIncomeModal(income.find(i => i.id === id));
+window.deleteIncome = (id) => deleteRow('income', id);
+
+function renderIncome() {
+  const el = document.getElementById('incomeTable');
+  if (income.length === 0) { el.innerHTML = `<div class="empty-state">No income entries yet.</div>`; return; }
+  const rows = sortRows(income, 'income', 'person');
+  el.innerHTML = `
+    <table class="ledger"><thead><tr>
+      <th onclick="toggleSort('income','person',renderIncome)">Person</th>
+      <th onclick="toggleSort('income','item',renderIncome)">Item</th>
+      <th class="num" onclick="toggleSort('income','amount',renderIncome)">Amount</th>
+      <th>Frequency</th>
+      <th class="num">Monthly Equiv.</th>
+      <th></th>
+    </tr></thead><tbody>
+      ${rows.map(i => `
+        <tr>
+          <td>${i.person || '—'}</td>
+          <td>${i.item || '—'}</td>
+          <td class="num">${fmtMoney(i.amount)}</td>
+          <td>${i.frequency || '—'}</td>
+          <td class="num">${fmtMoney(monthlyEquivalent(Number(i.amount) || 0, i.frequency))}</td>
+          <td class="row-actions">
+            <button onclick="editIncome('${i.id}')">Edit</button>
+            <button onclick="deleteIncome('${i.id}')">Delete</button>
+          </td>
+        </tr>`).join('')}
+    </tbody></table>`;
+}
+
+/* ---------------- EXPENSES (monthly + biweekly share one collection) ---------------- */
+window.openExpenseModal = function (frequency, existing) {
+  openModal(existing ? 'Edit Expense' : 'Add Expense', EXPENSE_FIELDS, 'expenses', existing, { frequency });
+};
+window.editExpense = (id) => {
+  const e = expenses.find(x => x.id === id);
+  window.openExpenseModal(e.frequency, e);
+};
+window.deleteExpense = (id) => deleteRow('expenses', id);
+
+function expenseTableHTML(rows, frequency, tableKey, renderFn) {
+  if (rows.length === 0) return `<div class="empty-state">No ${frequency} expenses yet.</div>`;
+  const total = rows.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  return `
+    <table class="ledger"><thead><tr>
+      <th onclick="toggleSort('${tableKey}','item',${renderFn})">Item</th>
+      <th class="num" onclick="toggleSort('${tableKey}','amount',${renderFn})">Amount</th>
+      <th></th>
+    </tr></thead><tbody>
+      ${rows.map(e => `
+        <tr>
+          <td>${e.item || '—'}</td>
+          <td class="num">${fmtMoney(e.amount)}</td>
+          <td class="row-actions">
+            <button onclick="editExpense('${e.id}')">Edit</button>
+            <button onclick="deleteExpense('${e.id}')">Delete</button>
+          </td>
+        </tr>`).join('')}
+      <tr><td style="font-weight:600;">Total</td><td class="num" style="font-weight:600;">${fmtMoney(total)}</td><td></td></tr>
+    </tbody></table>`;
+}
+
+function renderExpenses() {
+  const monthly = sortRows(expenses.filter(e => e.frequency === 'monthly'), 'expMonthly', 'item');
+  const biweekly = sortRows(expenses.filter(e => e.frequency === 'biweekly'), 'expBiweekly', 'item');
+  document.getElementById('monthlyExpenseTable').innerHTML = expenseTableHTML(monthly, 'monthly', 'expMonthly', 'renderExpenses');
+  document.getElementById('biweeklyExpenseTable').innerHTML = expenseTableHTML(biweekly, 'biweekly', 'expBiweekly', 'renderExpenses');
+}
+
+/* ---------------- PROJECTS ---------------- */
+window.openProjectModal = function (existing) {
+  openModal(existing ? 'Edit Project' : 'Add Project', PROJECT_FIELDS, 'projects', existing);
+};
+window.editProject = (id) => window.openProjectModal(projects.find(p => p.id === id));
+window.deleteProject = (id) => deleteRow('projects', id);
+
+const STATUS_STAMP = {
+  idea: '', planned: 'brass', 'in-progress': 'brass', done: 'green'
+};
+
+function renderProjects() {
+  const el = document.getElementById('projectsTable');
+  const filter = document.getElementById('projectStatusFilter').value;
+  let rows = filter === 'all' ? projects : projects.filter(p => p.status === filter);
+  if (rows.length === 0) { el.innerHTML = `<div class="empty-state">No projects match. Add one, or clear the filter.</div>`; return; }
+  rows = sortRows(rows, 'projects', 'name');
+  el.innerHTML = `
+    <table class="ledger"><thead><tr>
+      <th onclick="toggleSort('projects','name',renderProjects)">Project</th>
+      <th onclick="toggleSort('projects','status',renderProjects)">Status</th>
+      <th onclick="toggleSort('projects','effort',renderProjects)">Effort</th>
+      <th onclick="toggleSort('projects','importance',renderProjects)">Importance</th>
+      <th class="num" onclick="toggleSort('projects','costEstimate',renderProjects)">Est. Cost</th>
+      <th class="num">Allocated</th>
+      <th class="num">Spent</th>
+      <th></th>
+    </tr></thead><tbody>
+      ${rows.map(p => `
+        <tr>
+          <td>${p.name || '—'}</td>
+          <td>${STATUS_STAMP[p.status] ? `<span class="stamp ${STATUS_STAMP[p.status]}">${p.status}</span>` : (p.status || '—')}</td>
+          <td>${p.effort || '—'}</td>
+          <td>${p.importance || '—'}</td>
+          <td class="num">${p.costEstimate ? fmtMoney(p.costEstimate) : '—'}</td>
+          <td class="num">${p.budgetAllocated ? fmtMoney(p.budgetAllocated) : '—'}</td>
+          <td class="num">${p.budgetSpent ? fmtMoney(p.budgetSpent) : '—'}</td>
+          <td class="row-actions">
+            <button onclick="editProject('${p.id}')">Edit</button>
+            <button onclick="deleteProject('${p.id}')">Delete</button>
+          </td>
+        </tr>`).join('')}
+    </tbody></table>`;
+}
+
+/* ============================================================
+   IMPORT — Excel/CSV upload, column mapping, preview, commit
+   ============================================================ */
+const IMPORT_TARGETS = {
+  account: { schema: ACCOUNT_FIELDS, collectionName: 'accounts', extra: {} },
+  balanceHistory: { schema: BALANCE_HISTORY_FIELDS, collectionName: 'balanceHistory', extra: {} },
+  income: { schema: INCOME_FIELDS, collectionName: 'income', extra: {} },
+  expenseMonthly: { schema: EXPENSE_FIELDS, collectionName: 'expenses', extra: { frequency: 'monthly' } },
+  expenseBiweekly: { schema: EXPENSE_FIELDS, collectionName: 'expenses', extra: { frequency: 'biweekly' } },
+};
+
+let importParsedRows = [];   // raw rows as objects keyed by detected file header
+let importHeaders = [];
+let importFieldMap = {};     // schema key -> file header (or '' for skip)
+
+document.getElementById('importFile').addEventListener('change', handleImportFile);
+document.getElementById('importTarget').addEventListener('change', () => {
+  document.getElementById('importMapping').innerHTML = '';
+  document.getElementById('importPreview').innerHTML = '';
+  document.getElementById('importConfirmBtn').style.display = 'none';
+  if (importParsedRows.length) buildMappingUI();
+});
+
+function handleImportFile(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (evt) => {
+    const wb = XLSX.read(evt.target.result, { type: 'array', cellDates: true });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    importParsedRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+    importHeaders = importParsedRows.length ? Object.keys(importParsedRows[0]) : [];
+    buildMappingUI();
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function buildMappingUI() {
+  const targetKey = document.getElementById('importTarget').value;
+  const target = IMPORT_TARGETS[targetKey];
+  importFieldMap = {};
+  const guessMatch = (label) => importHeaders.find(h => h.toLowerCase().replace(/[^a-z0-9]/g, '')
+    === label.toLowerCase().replace(/[^a-z0-9]/g, '')) || '';
+
+  target.schema.forEach(f => { importFieldMap[f.key] = guessMatch(f.label) || guessMatch(f.key); });
+
+  const mapEl = document.getElementById('importMapping');
+  mapEl.innerHTML = `
+    <p style="font-size:12.5px;color:var(--ink-soft);margin:14px 0 10px;">
+      Detected ${importHeaders.length} columns, ${importParsedRows.length} rows. Match each field below, or leave "Skip" to omit it.
+    </p>
+    <table class="ledger"><thead><tr><th>App Field</th><th>Your Column</th></tr></thead><tbody>
+      ${target.schema.map(f => `
+        <tr>
+          <td>${f.label}</td>
+          <td>
+            <select onchange="setImportMapping('${f.key}', this.value)">
+              <option value="">— Skip —</option>
+              ${importHeaders.map(h => `<option value="${h}" ${importFieldMap[f.key] === h ? 'selected' : ''}>${h}</option>`).join('')}
+            </select>
+          </td>
+        </tr>`).join('')}
+    </tbody></table>
+    <div style="margin-top:14px;">
+      <button class="btn-ghost btn" onclick="buildImportPreview()">Preview Mapped Data</button>
+    </div>`;
+}
+
+window.setImportMapping = function (key, value) { importFieldMap[key] = value; };
+
+window.buildImportPreview = function () {
+  const targetKey = document.getElementById('importTarget').value;
+  const target = IMPORT_TARGETS[targetKey];
+  const mapped = mapRows(target, importParsedRows.slice(0, 5));
+  const previewEl = document.getElementById('importPreview');
+  previewEl.innerHTML = `
+    <p style="font-size:12.5px;color:var(--ink-soft);margin:16px 0 10px;">Preview (first 5 rows):</p>
+    <table class="ledger"><thead><tr>
+      ${target.schema.map(f => `<th>${f.label}</th>`).join('')}
+    </tr></thead><tbody>
+      ${mapped.map(row => `<tr>${target.schema.map(f => `<td>${row[f.key] ?? ''}</td>`).join('')}</tr>`).join('')}
+    </tbody></table>`;
+  document.getElementById('importConfirmBtn').style.display = 'inline-block';
+};
+
+function mapRows(target, rawRows) {
+  return rawRows.map(raw => {
+    const row = { ...target.extra };
+    target.schema.forEach(f => {
+      const sourceCol = importFieldMap[f.key];
+      let val = sourceCol ? raw[sourceCol] : '';
+      if (f.type === 'number') val = val === '' ? null : Number(val);
+      else if (f.type === 'checkbox') val = ['true', 'yes', '1', 'x', true].includes(typeof val === 'string' ? val.toLowerCase() : val);
+      else if (f.type === 'date' && val instanceof Date) val = val.toISOString().slice(0, 10);
+      else if (f.type === 'accountSelect') {
+        // match balance-history "Card" text against existing account names
+        const match = accounts.find(a => a.name && String(val).trim().toLowerCase() === a.name.trim().toLowerCase());
+        val = match ? match.id : '';
+      }
+      row[f.key] = val;
+    });
+    return row;
+  });
+}
+
+window.confirmImport = async function () {
+  const targetKey = document.getElementById('importTarget').value;
+  const target = IMPORT_TARGETS[targetKey];
+  const mapped = mapRows(target, importParsedRows);
+  if (targetKey === 'balanceHistory') {
+    const missing = mapped.filter(r => !r.accountId).length;
+    if (missing > 0 && !confirm(`${missing} row(s) don't match an existing card/loan name and will be skipped. Continue?`)) return;
+  }
+  const batch = writeBatch(db);
+  let count = 0;
+  mapped.forEach(row => {
+    if (targetKey === 'balanceHistory' && !row.accountId) return;
+    const ref = doc(collection(db, target.collectionName));
+    batch.set(ref, row);
+    count++;
+  });
+  await batch.commit();
+  alert(`Imported ${count} row(s).`);
+  importParsedRows = [];
+  document.getElementById('importFile').value = '';
+  document.getElementById('importMapping').innerHTML = '';
+  document.getElementById('importPreview').innerHTML = '';
+  document.getElementById('importConfirmBtn').style.display = 'none';
+};
+
+</script>
+</body>
+</html>
