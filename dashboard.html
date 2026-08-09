@@ -334,10 +334,41 @@
     font-size:13.5px;
   }
 
+  .table-wrap{
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+  }
+  .table-wrap table.ledger{min-width:560px;}
+
+  nav.tabs{
+    -webkit-overflow-scrolling:touch;
+    scrollbar-width:thin;
+  }
+
   @media (max-width:640px){
     main{padding:14px;}
     .panel{padding:16px;}
     header.masthead{padding:14px 16px;}
+    header.masthead .title{font-size:18px;}
+
+    /* Prevent iOS Safari from auto-zooming when a form field gets focus */
+    input, select, textarea{font-size:16px !important;}
+
+    .card-row{grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;}
+    .stat-card{padding:12px 14px;}
+    .stat-card .value{font-size:19px;}
+
+    nav.tabs button{padding:9px 14px;font-size:13px;}
+
+    .toolbar{flex-direction:column;align-items:stretch;}
+    .toolbar h2{margin-bottom:6px;}
+    .toolbar .filters{width:100%;}
+    .toolbar .btn, .toolbar button{width:100%;}
+
+    table.ledger th, table.ledger td{padding:10px;}
+    .row-actions button{font-size:13px;padding:4px 2px;}
+
+    .modal{padding:20px;max-height:92vh;}
   }
 </style>
 </head>
@@ -390,7 +421,13 @@
           </div>
           <button class="btn-ghost btn" onclick="saveSettings()">Save</button>
         </div>
-        <div id="debtPlanTable"></div>
+        <div id="debtPlanTable" class="table-wrap"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Project Savings Plan</h2>
+        <p class="panel-sub">Your project-side extra cascades to whichever project has the lowest priority number first, filling its budget gap before moving to the next.</p>
+        <div id="projectPlanTable" class="table-wrap"></div>
       </div>
 
       <div class="panel">
@@ -408,16 +445,19 @@
           <button class="btn" onclick="openAccountModal()">+ Add Account</button>
         </div>
         <p class="panel-sub">Metadata for every card, consolidation-program balance, and student loan.</p>
-        <div id="accountsTable"></div>
+        <div id="accountsTable" class="table-wrap"></div>
       </div>
 
       <div class="panel">
         <div class="toolbar">
           <h2 style="margin:0;">Balance History Log</h2>
-          <button class="btn" onclick="openBalanceHistoryModal()">+ Add Entry</button>
+          <div class="filters">
+            <button class="btn-ghost btn" onclick="openBulkBalanceModal()">Biweekly Update (All Cards)</button>
+            <button class="btn" onclick="openBalanceHistoryModal()">+ Add Entry</button>
+          </div>
         </div>
         <p class="panel-sub">Per-payment balance tracking, one row per statement/payment.</p>
-        <div id="balanceHistoryTable"></div>
+        <div id="balanceHistoryTable" class="table-wrap"></div>
       </div>
     </section>
 
@@ -428,7 +468,7 @@
           <h2 style="margin:0;">Income</h2>
           <button class="btn" onclick="openIncomeModal()">+ Add Income</button>
         </div>
-        <div id="incomeTable"></div>
+        <div id="incomeTable" class="table-wrap"></div>
       </div>
 
       <div class="panel">
@@ -439,7 +479,7 @@
             <button class="btn" onclick="openExpenseModal('monthly')">+ Add Expense</button>
           </div>
         </div>
-        <div id="monthlyExpenseTable"></div>
+        <div id="monthlyExpenseTable" class="table-wrap"></div>
       </div>
 
       <div class="panel">
@@ -450,7 +490,7 @@
             <button class="btn" onclick="openExpenseModal('biweekly')">+ Add Expense</button>
           </div>
         </div>
-        <div id="biweeklyExpenseTable"></div>
+        <div id="biweeklyExpenseTable" class="table-wrap"></div>
       </div>
     </section>
 
@@ -473,7 +513,7 @@
             </select>
           </div>
         </div>
-        <div id="projectsTable"></div>
+        <div id="projectsTable" class="table-wrap"></div>
       </div>
     </section>
 
@@ -665,6 +705,7 @@ function monthlyEquivalent(amount, frequency) {
   switch (frequency) {
     case 'weekly': return amount * 4.33;
     case 'biweekly': return amount * 2.166;
+    case 'semimonthly': return amount * 2;
     case 'monthly': return amount;
     case 'yearly': return amount / 12;
     default: return amount;
@@ -690,7 +731,11 @@ function computeDebtPlan(extraAmount) {
       promoActive = daysLeft > 0;
     }
     return { ...a, balance, minPayment, normalAPR, promoActive, daysLeft };
-  }).filter(a => a.balance > 0);
+  })
+    // Accounts tagged "in program" are already being handled through a
+    // separate consolidation arrangement — extra payments here shouldn't
+    // compete with that.
+    .filter(a => a.balance > 0 && !a.inProgram);
 
   const urgentPromo = enriched.filter(a => a.promoActive && a.daysLeft <= PULL_FORWARD_DAYS)
     .sort((a, b) => a.daysLeft - b.daysLeft);
@@ -711,6 +756,32 @@ function computeDebtPlan(extraAmount) {
     else if (a.promoActive) reason = `0% APR — safe until ${fmtDate(a.promoAPRDate)}`;
     else reason = `${a.normalAPR}% APR`;
     return { ...a, extraAllocation: alloc, rank: i + 1, reason };
+  });
+}
+
+/* ---------------- PROJECT SAVINGS CASCADE ---------------- */
+// Same waterfall idea as the debt plan, applied to projects: fill the
+// budget gap of the lowest priority-number project first, then move
+// down the list. Projects with no rank sort to the back. "Done" and
+// "idea" stage projects are excluded — nothing to save toward yet.
+function computeProjectSavingsPlan(extraAmount) {
+  const eligible = projects
+    .filter(p => (p.status === 'planned' || p.status === 'in-progress'))
+    .map(p => ({
+      ...p,
+      gap: Math.max((Number(p.costEstimate) || 0) - (Number(p.budgetAllocated) || 0), 0),
+    }))
+    .filter(p => p.gap > 0)
+    .sort((a, b) => {
+      const pa = a.priority ?? Infinity, pb = b.priority ?? Infinity;
+      return pa - pb;
+    });
+
+  let remaining = Number(extraAmount) || 0;
+  return eligible.map((p, i) => {
+    const alloc = Math.max(Math.min(remaining, p.gap), 0);
+    remaining -= alloc;
+    return { ...p, allocation: alloc, rank: i + 1 };
   });
 }
 
@@ -758,16 +829,19 @@ function renderDashboard() {
   const projectExtra = extra - debtExtra;
 
   const plan = computeDebtPlan(debtExtra);
+  const inProgramAccounts = accounts.filter(a => a.inProgram && (Number(a.balance) || 0) > 0);
   const planEl = document.getElementById('debtPlanTable');
-  if (plan.length === 0) {
+  if (plan.length === 0 && inProgramAccounts.length === 0) {
     planEl.innerHTML = `<div class="empty-state">Add a card or loan with a balance to see a paydown plan.</div>`;
   } else {
-    planEl.innerHTML = `
-      <p style="font-size:13px;color:var(--ink-soft);margin:0 0 12px;">
-        Of your $${extra.toFixed(0)}/mo extra: <strong>${fmtMoney(debtExtra)}</strong> to debt,
-        <strong>${fmtMoney(projectExtra)}</strong> to project savings.
-      </p>
-      <table class="ledger">
+    const programNote = inProgramAccounts.length
+      ? `<p style="font-size:12.5px;color:var(--ink-soft);margin:0 0 12px;">
+           Not shown: ${inProgramAccounts.map(a => `${a.name} (${fmtMoney(a.balance)})`).join(', ')}
+           — already in your consolidation program, excluded from this plan.
+         </p>` : '';
+    const planTable = plan.length === 0
+      ? `<div class="empty-state">No accounts outside the consolidation program need extra payments right now.</div>`
+      : `<table class="ledger">
         <thead><tr>
           <th>Priority</th><th>Account</th><th>Why</th>
           <th class="num">Balance</th><th class="num">Extra This Month</th>
@@ -782,6 +856,35 @@ function renderDashboard() {
                   : p.reason}</td>
               <td class="num">${fmtMoney(p.balance)}</td>
               <td class="num">${fmtMoney(p.extraAllocation)}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+    planEl.innerHTML = `
+      <p style="font-size:13px;color:var(--ink-soft);margin:0 0 12px;">
+        Of your $${extra.toFixed(0)}/mo extra: <strong>${fmtMoney(debtExtra)}</strong> to debt,
+        <strong>${fmtMoney(projectExtra)}</strong> to project savings.
+      </p>
+      ${programNote}${planTable}`;
+  }
+
+  const projectPlan = computeProjectSavingsPlan(projectExtra);
+  const projectPlanEl = document.getElementById('projectPlanTable');
+  if (projectPlan.length === 0) {
+    projectPlanEl.innerHTML = `<div class="empty-state">No planned/in-progress projects with a remaining budget gap. Set a Cost Estimate and Priority Rank on a project to see it here.</div>`;
+  } else {
+    projectPlanEl.innerHTML = `
+      <table class="ledger">
+        <thead><tr>
+          <th>Priority</th><th>Project</th>
+          <th class="num">Gap Remaining</th><th class="num">This Month</th>
+        </tr></thead>
+        <tbody>
+          ${projectPlan.map(p => `
+            <tr>
+              <td>${p.rank === 1 ? '<span class="stamp green">Save Here First</span>' : p.rank}</td>
+              <td>${p.name || '—'}</td>
+              <td class="num">${fmtMoney(p.gap)}</td>
+              <td class="num">${fmtMoney(p.allocation)}</td>
             </tr>`).join('')}
         </tbody>
       </table>`;
@@ -868,9 +971,9 @@ const ACCOUNT_FIELDS = [
   { key: 'name', label: 'Card / Loan Name', type: 'text' },
   { key: 'type', label: 'Type', type: 'select', options: ['card', 'consolidation', 'studentloan'] },
   { key: 'inProgram', label: 'In Consolidation Program', type: 'checkbox' },
-  { key: 'usagePct', label: '% Usage', type: 'number' },
+  { key: 'usagePct', label: '% Usage', type: 'number', percentField: true },
   { key: 'balance', label: 'Balance', type: 'number' },
-  { key: 'normalAPR', label: 'Normal APR (%)', type: 'number' },
+  { key: 'normalAPR', label: 'Normal APR (%)', type: 'number', percentField: true },
   { key: 'promoAPRDate', label: '0% APR End Date', type: 'date' },
   { key: 'creditLimit', label: 'Credit Limit', type: 'number' },
   { key: 'minPayment', label: 'Minimum Payment', type: 'number' },
@@ -888,14 +991,20 @@ const INCOME_FIELDS = [
   { key: 'person', label: 'Person', type: 'text' },
   { key: 'item', label: 'Item', type: 'text' },
   { key: 'amount', label: 'Amount', type: 'number' },
-  { key: 'frequency', label: 'Frequency', type: 'select', options: ['weekly', 'biweekly', 'monthly', 'yearly'] },
+  { key: 'frequency', label: 'Frequency', type: 'select', options: ['weekly', 'biweekly', 'semimonthly', 'monthly', 'yearly'] },
 ];
 const EXPENSE_FIELDS = [
   { key: 'item', label: 'Item', type: 'text' },
   { key: 'amount', label: 'Amount', type: 'number' },
 ];
+const BIWEEKLY_EXPENSE_FIELDS = [
+  { key: 'item', label: 'Item', type: 'text' },
+  { key: 'amount', label: 'Amount', type: 'number' },
+  { key: 'accountId', label: 'Card', type: 'accountSelect' },
+];
 const PROJECT_FIELDS = [
   { key: 'name', label: 'Project Name', type: 'text' },
+  { key: 'priority', label: 'Priority Rank (1 = first)', type: 'number' },
   { key: 'status', label: 'Status', type: 'select', options: ['idea', 'planned', 'in-progress', 'done'] },
   { key: 'effort', label: 'Effort', type: 'select', options: ['low', 'medium', 'high'] },
   { key: 'importance', label: 'Importance', type: 'select', options: ['low', 'medium', 'high'] },
@@ -962,7 +1071,22 @@ async function saveModal() {
   } else {
     await addDoc(collection(db, collectionName), data);
   }
+  if (collectionName === 'balanceHistory') await syncAccountFromEntry(data);
   closeModal();
+}
+
+// Keeps the account's current balance/minimum payment in step with the
+// balance-history log, so you never have to enter a number twice. Only
+// syncs when the saved entry is the newest one on file for that card —
+// editing an older history row won't overwrite a more recent balance.
+async function syncAccountFromEntry(entry) {
+  if (!entry.accountId) return;
+  const isNewest = !balanceHistory.some(h => h.accountId === entry.accountId && h.date > entry.date);
+  if (!isNewest) return;
+  const updates = {};
+  if (entry.balance !== null && entry.balance !== undefined && entry.balance !== '') updates.balance = entry.balance;
+  if (entry.minimumDue !== null && entry.minimumDue !== undefined && entry.minimumDue !== '') updates.minPayment = entry.minimumDue;
+  if (Object.keys(updates).length) await updateDoc(doc(db, 'accounts', entry.accountId), updates);
 }
 
 async function deleteRow(collectionName, id) {
@@ -1018,6 +1142,60 @@ window.openBalanceHistoryModal = function (existing) {
 };
 window.editBalanceHistory = (id) => window.openBalanceHistoryModal(balanceHistory.find(h => h.id === id));
 window.deleteBalanceHistory = (id) => deleteRow('balanceHistory', id);
+
+/* ---------------- BULK BIWEEKLY UPDATE ---------------- */
+// One date, one row per account. Leave a row blank to skip that card.
+// Each filled row writes a balanceHistory entry AND syncs the account's
+// current balance/minimum payment, same as a single manual entry does.
+window.openBulkBalanceModal = function () {
+  if (accounts.length === 0) { alert('Add a card or loan first.'); return; }
+  modalContext = { bulk: true };
+  document.getElementById('modalTitle').textContent = 'Biweekly Update — All Cards';
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('modalFields').innerHTML = `
+    <div class="field">
+      <label for="bulkDate">Date</label>
+      <input type="date" id="bulkDate" value="${today}">
+    </div>
+    <table class="ledger" style="margin-top:6px;">
+      <thead><tr><th>Card</th><th class="num">Balance</th><th class="num">Minimum Due</th></tr></thead>
+      <tbody>
+        ${accounts.map(a => `
+          <tr>
+            <td>${a.name}</td>
+            <td><input type="number" id="bulk_bal_${a.id}" value="${a.balance ?? ''}" style="width:100px;text-align:right;"></td>
+            <td><input type="number" id="bulk_min_${a.id}" value="${a.minPayment ?? ''}" style="width:90px;text-align:right;"></td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+  document.getElementById('modalBackdrop').classList.add('active');
+  document.getElementById('modalSaveBtn').onclick = saveBulkBalance;
+};
+
+async function saveBulkBalance() {
+  const date = document.getElementById('bulkDate').value;
+  if (!date) { alert('Pick a date.'); return; }
+  let count = 0;
+  for (const a of accounts) {
+    const balEl = document.getElementById('bulk_bal_' + a.id);
+    const minEl = document.getElementById('bulk_min_' + a.id);
+    if (balEl.value === '') continue; // skip blank rows
+    const entry = {
+      accountId: a.id,
+      date,
+      balance: Number(balEl.value),
+      minimumDue: minEl.value === '' ? null : Number(minEl.value),
+      paymentAmount: null,
+      dueDate: '',
+      newBalance: null,
+    };
+    await addDoc(collection(db, 'balanceHistory'), entry);
+    await syncAccountFromEntry(entry);
+    count++;
+  }
+  closeModal();
+  alert(`Logged ${count} card(s) for ${fmtDate(date)}.`);
+}
 
 function renderBalanceHistory() {
   const el = document.getElementById('balanceHistoryTable');
@@ -1090,7 +1268,8 @@ function renderIncome() {
 
 /* ---------------- EXPENSES (monthly + biweekly share one collection) ---------------- */
 window.openExpenseModal = function (frequency, existing) {
-  openModal(existing ? 'Edit Expense' : 'Add Expense', EXPENSE_FIELDS, 'expenses', existing, { frequency });
+  const schema = frequency === 'biweekly' ? BIWEEKLY_EXPENSE_FIELDS : EXPENSE_FIELDS;
+  openModal(existing ? 'Edit Expense' : 'Add Expense', schema, 'expenses', existing, { frequency });
 };
 window.editExpense = (id) => {
   const e = expenses.find(x => x.id === id);
@@ -1110,22 +1289,27 @@ window.clearExpenses = async function (frequency) {
 function expenseTableHTML(rows, frequency, tableKey, renderFn) {
   if (rows.length === 0) return `<div class="empty-state">No ${frequency} expenses yet.</div>`;
   const total = rows.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const showCard = frequency === 'biweekly';
   return `
     <table class="ledger"><thead><tr>
       <th onclick="toggleSort('${tableKey}','item',${renderFn})">Item</th>
       <th class="num" onclick="toggleSort('${tableKey}','amount',${renderFn})">Amount</th>
+      ${showCard ? '<th>Card</th>' : ''}
       <th></th>
     </tr></thead><tbody>
-      ${rows.map(e => `
-        <tr>
+      ${rows.map(e => {
+        const acct = e.accountId ? accounts.find(a => a.id === e.accountId) : null;
+        return `<tr>
           <td>${e.item || '—'}</td>
           <td class="num">${fmtMoney(e.amount)}</td>
+          ${showCard ? `<td>${acct ? acct.name : '—'}</td>` : ''}
           <td class="row-actions">
             <button onclick="editExpense('${e.id}')">Edit</button>
             <button onclick="deleteExpense('${e.id}')">Delete</button>
           </td>
-        </tr>`).join('')}
-      <tr><td style="font-weight:600;">Total</td><td class="num" style="font-weight:600;">${fmtMoney(total)}</td><td></td></tr>
+        </tr>`;
+      }).join('')}
+      <tr><td style="font-weight:600;">Total</td><td class="num" style="font-weight:600;">${fmtMoney(total)}</td>${showCard ? '<td></td>' : ''}<td></td></tr>
     </tbody></table>`;
 }
 
@@ -1152,9 +1336,10 @@ function renderProjects() {
   const filter = document.getElementById('projectStatusFilter').value;
   let rows = filter === 'all' ? projects : projects.filter(p => p.status === filter);
   if (rows.length === 0) { el.innerHTML = `<div class="empty-state">No projects match. Add one, or clear the filter.</div>`; return; }
-  rows = sortRows(rows, 'projects', 'name');
+  rows = sortRows(rows, 'projects', 'priority');
   el.innerHTML = `
     <table class="ledger"><thead><tr>
+      <th class="num" onclick="toggleSort('projects','priority',renderProjects)">Priority</th>
       <th onclick="toggleSort('projects','name',renderProjects)">Project</th>
       <th onclick="toggleSort('projects','status',renderProjects)">Status</th>
       <th onclick="toggleSort('projects','effort',renderProjects)">Effort</th>
@@ -1166,6 +1351,7 @@ function renderProjects() {
     </tr></thead><tbody>
       ${rows.map(p => `
         <tr>
+          <td class="num">${p.priority ?? '—'}</td>
           <td>${p.name || '—'}</td>
           <td>${STATUS_STAMP[p.status] ? `<span class="stamp ${STATUS_STAMP[p.status]}">${p.status}</span>` : (p.status || '—')}</td>
           <td>${p.effort || '—'}</td>
@@ -1189,7 +1375,7 @@ const IMPORT_TARGETS = {
   balanceHistory: { schema: BALANCE_HISTORY_FIELDS, collectionName: 'balanceHistory', extra: {} },
   income: { schema: INCOME_FIELDS, collectionName: 'income', extra: {} },
   expenseMonthly: { schema: EXPENSE_FIELDS, collectionName: 'expenses', extra: { frequency: 'monthly' } },
-  expenseBiweekly: { schema: EXPENSE_FIELDS, collectionName: 'expenses', extra: { frequency: 'biweekly' } },
+  expenseBiweekly: { schema: BIWEEKLY_EXPENSE_FIELDS, collectionName: 'expenses', extra: { frequency: 'biweekly' } },
 };
 
 let importParsedRows = [];   // raw rows as objects keyed by detected file header
@@ -1272,7 +1458,15 @@ function mapRows(target, rawRows) {
     target.schema.forEach(f => {
       const sourceCol = importFieldMap[f.key];
       let val = sourceCol ? raw[sourceCol] : '';
-      if (f.type === 'number') val = val === '' ? null : Number(val);
+      if (f.type === 'number') {
+        val = val === '' ? null : Number(val);
+        // Excel stores % formatted cells as their decimal value (0.2099 for
+        // "20.99%"). A card APR/usage under 1 is never realistic, so treat
+        // that as the tell and convert it back to a whole percent.
+        if (f.percentField && typeof val === 'number' && val > 0 && val < 1) {
+          val = Math.round(val * 10000) / 100;
+        }
+      }
       else if (f.type === 'checkbox') val = ['true', 'yes', '1', 'x', true].includes(typeof val === 'string' ? val.toLowerCase() : val);
       else if (f.type === 'date' && val instanceof Date) val = val.toISOString().slice(0, 10);
       else if (f.type === 'accountSelect') {
