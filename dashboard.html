@@ -486,10 +486,14 @@
         <div class="toolbar">
           <h2 style="margin:0;">Biweekly Card Expenses</h2>
           <div class="filters">
+            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Daily card:
+              <select id="defaultCardSelect" class="account-select" style="margin-left:6px;" onchange="saveDefaultCard()"></select>
+            </label>
             <button class="btn-ghost btn" onclick="clearExpenses('biweekly')">Clear All</button>
             <button class="btn" onclick="openExpenseModal('biweekly')">+ Add Expense</button>
           </div>
         </div>
+        <p class="panel-sub">New entries default to this card — only change it per-entry when needed.</p>
         <div id="biweeklyExpenseTable" class="table-wrap"></div>
       </div>
     </section>
@@ -609,7 +613,7 @@ let balanceHistory = [];
 let income = [];
 let expenses = [];       // { item, amount, frequency: 'monthly'|'biweekly' }
 let projects = [];
-let settings = { monthlyExtra: 0, splitRatio: 70 };
+let settings = { monthlyExtra: 0, splitRatio: 70, defaultCardId: '' };
 
 let unsubs = [];
 let sortState = {}; // per-table current sort {key, dir}
@@ -672,6 +676,7 @@ function startListeners() {
       document.getElementById('monthlyExtraInput').value = settings.monthlyExtra || 0;
       document.getElementById('splitRatioInput').value = settings.splitRatio ?? 70;
       document.getElementById('splitRatioLabel').textContent = (settings.splitRatio ?? 70) + '%';
+      populateAccountSelects();
       renderDashboard();
     }
   });
@@ -961,7 +966,14 @@ function populateAccountSelects() {
     sel.innerHTML = accounts.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
     if (current) sel.value = current;
   });
+  const dcs = document.getElementById('defaultCardSelect');
+  if (dcs && settings.defaultCardId) dcs.value = settings.defaultCardId;
 }
+
+window.saveDefaultCard = async function () {
+  settings.defaultCardId = document.getElementById('defaultCardSelect').value;
+  await setDoc(doc(db, 'settings', 'main'), settings);
+};
 
 /* ============================================================
    FIELD SCHEMAS — single source of truth for forms + import mapping
@@ -1269,7 +1281,10 @@ function renderIncome() {
 /* ---------------- EXPENSES (monthly + biweekly share one collection) ---------------- */
 window.openExpenseModal = function (frequency, existing) {
   const schema = frequency === 'biweekly' ? BIWEEKLY_EXPENSE_FIELDS : EXPENSE_FIELDS;
-  openModal(existing ? 'Edit Expense' : 'Add Expense', schema, 'expenses', existing, { frequency });
+  const title = existing ? 'Edit Expense' : 'Add Expense';
+  const prefill = existing || (frequency === 'biweekly' && settings.defaultCardId
+    ? { accountId: settings.defaultCardId } : null);
+  openModal(title, schema, 'expenses', prefill, { frequency });
 };
 window.editExpense = (id) => {
   const e = expenses.find(x => x.id === id);
