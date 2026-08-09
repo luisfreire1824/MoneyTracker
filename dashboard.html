@@ -398,6 +398,7 @@
     <button data-tab="debt">Debt &amp; Cards</button>
     <button data-tab="money">Income &amp; Expenses</button>
     <button data-tab="projects">Projects</button>
+    <button data-tab="calendar">Calendar</button>
     <button data-tab="import">Import Data</button>
   </nav>
 
@@ -431,6 +432,18 @@
       </div>
 
       <div class="panel">
+        <h2>Next 7 Days</h2>
+        <p class="panel-sub">Bills, card due dates, and income hitting soon. Full timeline on the Calendar tab.</p>
+        <div id="next7Table" class="table-wrap"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Free Cash Trend</h2>
+        <p class="panel-sub">Logged automatically each month you open the app.</p>
+        <canvas id="cashFlowChart" height="90"></canvas>
+      </div>
+
+      <div class="panel">
         <h2>Balance History</h2>
         <p class="panel-sub">Trend across all cards and loans.</p>
         <canvas id="balanceChart" height="90"></canvas>
@@ -445,6 +458,23 @@
           <button class="btn" onclick="openAccountModal()">+ Add Account</button>
         </div>
         <p class="panel-sub">Metadata for every card, consolidation-program balance, and student loan.</p>
+        <div class="toolbar">
+          <div class="filters">
+            <input type="text" id="accountNameFilter" placeholder="Search name…" oninput="renderAccounts()" style="width:140px;">
+            <select id="accountOwnerFilter" onchange="renderAccounts()"><option value="">All owners</option></select>
+            <select id="accountTypeFilter" onchange="renderAccounts()">
+              <option value="">All types</option>
+              <option value="card">Card</option>
+              <option value="consolidation">Consolidation</option>
+              <option value="studentloan">Student loan</option>
+            </select>
+            <select id="accountProgramFilter" onchange="renderAccounts()">
+              <option value="">All (program or not)</option>
+              <option value="yes">In program</option>
+              <option value="no">Not in program</option>
+            </select>
+          </div>
+        </div>
         <div id="accountsTable" class="table-wrap"></div>
       </div>
 
@@ -525,20 +555,49 @@
       </div>
     </section>
 
+    <!-- ---------- CALENDAR ---------- -->
+    <section id="tab-calendar" class="tab-content">
+      <div class="panel">
+        <div class="toolbar">
+          <h2 style="margin:0;">Upcoming</h2>
+          <div class="filters">
+            <select id="calendarRange" onchange="renderCalendar()">
+              <option value="14">Next 14 days</option>
+              <option value="30" selected>Next 30 days</option>
+              <option value="60">Next 60 days</option>
+              <option value="90">Next 90 days</option>
+            </select>
+          </div>
+        </div>
+        <p class="panel-sub">Recurring expenses, card minimum-payment due dates, and income &mdash; all in one timeline. Set a Due Day on monthly expenses and a Next Pay Date on income to populate this.</p>
+        <div id="calendarTable" class="table-wrap"></div>
+      </div>
+    </section>
+
     <!-- ---------- IMPORT ---------- -->
     <section id="tab-import" class="tab-content">
+      <div class="panel">
+        <h2>Backup</h2>
+        <p class="panel-sub">This is your real financial data, living only in Firestore. Worth an occasional local copy.</p>
+        <button class="btn" onclick="exportAllData()">Download Backup (.xlsx)</button>
+      </div>
+
       <div class="panel">
         <h2>Import from Excel/CSV</h2>
         <p class="panel-sub">Upload a sheet, map its columns to the right fields, review, then confirm.</p>
         <div class="field">
           <label>What are you importing?</label>
-          <select id="importTarget">
+          <select id="importTarget" onchange="toggleImportOwnerField()">
             <option value="account">Card / Loan metadata</option>
             <option value="balanceHistory">Balance history</option>
             <option value="income">Income</option>
             <option value="expenseMonthly">Monthly expenses</option>
             <option value="expenseBiweekly">Biweekly card expenses</option>
           </select>
+        </div>
+        <div class="field" id="importOwnerField" style="display:none;">
+          <label>Whose history is this? (matches card names within this person's accounts only)</label>
+          <select id="importOwnerSelect"><option value="">All owners</option></select>
         </div>
         <div class="field">
           <label>File</label>
@@ -617,6 +676,7 @@ let balanceHistory = [];
 let income = [];
 let expenses = [];       // { item, amount, frequency: 'monthly'|'biweekly' }
 let projects = [];
+let cashFlowHistory = [];
 let settings = { monthlyExtra: 0, splitRatio: 70, defaultCardId: '' };
 
 let unsubs = [];
@@ -656,23 +716,27 @@ onAuthStateChanged(auth, (user) => {
 function startListeners() {
   unsubs.push(onSnapshot(collection(db, 'accounts'), snap => {
     accounts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderAccounts(); renderDashboard(); renderBalanceChart(); populateAccountSelects();
+    renderAccounts(); renderDashboard(); renderBalanceChart(); populateAccountSelects(); renderCalendar();
   }));
   unsubs.push(onSnapshot(collection(db, 'balanceHistory'), snap => {
     balanceHistory = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderBalanceHistory(); renderBalanceChart();
+    renderBalanceHistory(); renderBalanceChart(); renderCalendar();
   }));
   unsubs.push(onSnapshot(collection(db, 'income'), snap => {
     income = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderIncome(); renderDashboard();
+    renderIncome(); renderDashboard(); renderCalendar();
   }));
   unsubs.push(onSnapshot(collection(db, 'expenses'), snap => {
     expenses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderExpenses(); renderDashboard();
+    renderExpenses(); renderDashboard(); renderCalendar();
   }));
   unsubs.push(onSnapshot(collection(db, 'projects'), snap => {
     projects = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderProjects(); renderDashboard();
+  }));
+  unsubs.push(onSnapshot(collection(db, 'cashFlowHistory'), snap => {
+    cashFlowHistory = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderCashFlowChart();
   }));
   getDoc(doc(db, 'settings', 'main')).then(snap => {
     if (snap.exists()) {
@@ -719,6 +783,146 @@ function monthlyEquivalent(amount, frequency) {
     case 'yearly': return amount / 12;
     default: return amount;
   }
+}
+
+/* ---------------- CALENDAR: date-math helpers ---------------- */
+function daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
+
+// Next occurrence(s) of a monthly recurrence (same day-of-month as the
+// anchor, clamped to shorter months) that fall within [rangeStart, rangeEnd].
+function monthlyOccurrencesInRange(anchorDateStr, rangeStart, rangeEnd) {
+  const anchor = new Date(anchorDateStr + 'T00:00:00');
+  const day = anchor.getDate();
+  const results = [];
+  let cursor = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1);
+  while (cursor <= rangeEnd) {
+    const dim = daysInMonth(cursor.getFullYear(), cursor.getMonth());
+    const occ = new Date(cursor.getFullYear(), cursor.getMonth(), Math.min(day, dim));
+    if (occ >= rangeStart && occ <= rangeEnd && occ >= anchor) results.push(occ);
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+  }
+  return results;
+}
+
+// Weekly/biweekly recurrence stepping by intervalDays from an anchor date.
+function intervalOccurrencesInRange(anchorDate, intervalDays, rangeStart, rangeEnd) {
+  let d = new Date(anchorDate);
+  const results = [];
+  if (d < rangeStart) {
+    const diffDays = Math.floor((rangeStart - d) / 86400000);
+    const steps = Math.floor(diffDays / intervalDays);
+    d = new Date(d.getTime() + steps * intervalDays * 86400000);
+    while (d < rangeStart) d = new Date(d.getTime() + intervalDays * 86400000);
+  }
+  while (d <= rangeEnd) { results.push(new Date(d)); d = new Date(d.getTime() + intervalDays * 86400000); }
+  return results;
+}
+
+// Semimonthly: the 15th and the last day of every month in range.
+function semimonthlyOccurrencesInRange(rangeStart, rangeEnd) {
+  const results = [];
+  let cursor = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1);
+  while (cursor <= rangeEnd) {
+    const dim = daysInMonth(cursor.getFullYear(), cursor.getMonth());
+    [15, dim].forEach(day => {
+      const occ = new Date(cursor.getFullYear(), cursor.getMonth(), day);
+      if (occ >= rangeStart && occ <= rangeEnd) results.push(occ);
+    });
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+  }
+  return results;
+}
+
+// Builds the unified event list: monthly expenses (by Due Day), income (by
+// Next Pay Date + frequency), and card minimum-payment due dates (derived
+// from each account's most recent balance-history entry, rolled forward
+// monthly). Biweekly card expenses are spending categories, not discrete
+// due dates, so they're intentionally left off.
+function generateUpcomingEvents(rangeDays) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const rangeEnd = new Date(today.getTime() + rangeDays * 86400000);
+  const events = [];
+
+  expenses.filter(e => e.frequency === 'monthly' && e.dueDay).forEach(e => {
+    const anchor = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(Math.min(e.dueDay, 28)).padStart(2, '0')}`;
+    monthlyOccurrencesInRange(anchor, today, rangeEnd).forEach(d =>
+      events.push({ date: d, type: 'expense', label: e.item, amount: e.amount }));
+  });
+
+  income.forEach(i => {
+    const label = i.item || i.person || 'Income';
+    if (i.frequency === 'semimonthly') {
+      semimonthlyOccurrencesInRange(today, rangeEnd).forEach(d =>
+        events.push({ date: d, type: 'income', label, amount: i.amount }));
+    } else if (i.frequency === 'monthly' && i.nextDate) {
+      monthlyOccurrencesInRange(i.nextDate, today, rangeEnd).forEach(d =>
+        events.push({ date: d, type: 'income', label, amount: i.amount }));
+    } else if ((i.frequency === 'weekly' || i.frequency === 'biweekly') && i.nextDate) {
+      const interval = i.frequency === 'weekly' ? 7 : 14;
+      intervalOccurrencesInRange(new Date(i.nextDate + 'T00:00:00'), interval, today, rangeEnd).forEach(d =>
+        events.push({ date: d, type: 'income', label, amount: i.amount }));
+    }
+  });
+
+  accounts.forEach(a => {
+    const entries = balanceHistory.filter(h => h.accountId === a.id && h.dueDate)
+      .sort((x, y) => new Date(y.date) - new Date(x.date));
+    if (entries.length === 0) return;
+    monthlyOccurrencesInRange(entries[0].dueDate, today, rangeEnd).forEach(d =>
+      events.push({ date: d, type: 'debt', label: a.name, amount: a.minPayment }));
+  });
+
+  events.sort((a, b) => a.date - b.date);
+  return events;
+}
+
+const EVENT_TYPE_STAMP = { expense: 'brass', income: 'green', debt: '' };
+const EVENT_TYPE_LABEL = { expense: 'Bill', income: 'Income', debt: 'Card Due' };
+
+function renderNext7Days() {
+  const el = document.getElementById('next7Table');
+  if (!el) return;
+  const events = generateUpcomingEvents(7);
+  if (events.length === 0) {
+    el.innerHTML = `<div class="empty-state">Nothing scheduled in the next 7 days.</div>`;
+    return;
+  }
+  el.innerHTML = `
+    <table class="ledger"><thead><tr>
+      <th>Date</th><th>Type</th><th>Item</th><th class="num">Amount</th>
+    </tr></thead><tbody>
+      ${events.map(e => `
+        <tr>
+          <td>${e.date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</td>
+          <td><span class="stamp ${EVENT_TYPE_STAMP[e.type] || ''}">${EVENT_TYPE_LABEL[e.type]}</span></td>
+          <td>${e.label || '—'}</td>
+          <td class="num">${e.amount ? fmtMoney(e.amount) : '—'}</td>
+        </tr>`).join('')}
+    </tbody></table>`;
+}
+
+function renderCalendar() {
+  const el = document.getElementById('calendarTable');
+  renderNext7Days();
+  if (!el) return;
+  const rangeDays = Number(document.getElementById('calendarRange').value);
+  const events = generateUpcomingEvents(rangeDays);
+  if (events.length === 0) {
+    el.innerHTML = `<div class="empty-state">Nothing scheduled yet. Add a Due Day to monthly expenses or a Next Pay Date to income to populate this.</div>`;
+    return;
+  }
+  el.innerHTML = `
+    <table class="ledger"><thead><tr>
+      <th>Date</th><th>Type</th><th>Item</th><th class="num">Amount</th>
+    </tr></thead><tbody>
+      ${events.map(e => `
+        <tr>
+          <td>${e.date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</td>
+          <td>${EVENT_TYPE_STAMP[e.type] ? `<span class="stamp ${EVENT_TYPE_STAMP[e.type]}">${EVENT_TYPE_LABEL[e.type]}</span>` : `<span class="stamp">${EVENT_TYPE_LABEL[e.type]}</span>`}</td>
+          <td>${e.label || '—'}</td>
+          <td class="num">${e.amount ? fmtMoney(e.amount) : '—'}</td>
+        </tr>`).join('')}
+    </tbody></table>`;
 }
 
 /* ---------------- DEBT PAYDOWN RECOMMENDER ---------------- */
@@ -768,6 +972,49 @@ function computeDebtPlan(extraAmount) {
   });
 }
 
+// Simulates the same waterfall month-by-month (fixed priority order,
+// minimums always paid, extra cascades to the next account once one
+// clears) to project when each account — and the whole plan — hits zero.
+// Uses each account's normalAPR throughout for simplicity; the 0%-promo
+// pull-forward logic already front-loads those balances in the order,
+// so this is a close approximation, not a promo-aware simulation.
+function projectDebtPayoff(extraAmount) {
+  const order = computeDebtPlan(0); // reuse the same priority order
+  if (order.length === 0) return { months: 0, perAccount: {}, cleared: true };
+  const bal = {}; order.forEach(a => { bal[a.id] = a.balance; });
+  const payoffMonth = {};
+  const MAX_MONTHS = 480; // 40-year safety cap
+  let month = 0;
+  let prevTotal = Infinity;
+  while (Object.values(bal).some(v => v > 0.5) && month < MAX_MONTHS) {
+    month++;
+    order.forEach(a => {
+      if (bal[a.id] <= 0) return;
+      bal[a.id] += bal[a.id] * ((a.normalAPR || 0) / 100 / 12);
+      bal[a.id] -= Math.min(a.minPayment || 0, bal[a.id]);
+    });
+    let extra = Number(extraAmount) || 0;
+    for (const a of order) {
+      if (extra <= 0) break;
+      if (bal[a.id] <= 0) continue;
+      const pay = Math.min(extra, bal[a.id]);
+      bal[a.id] -= pay; extra -= pay;
+    }
+    order.forEach(a => { if (bal[a.id] <= 0.5 && !payoffMonth[a.id]) payoffMonth[a.id] = month; });
+    const total = Object.values(bal).reduce((s, v) => s + Math.max(v, 0), 0);
+    if (total >= prevTotal) break; // not decreasing — extra too small vs. interest, bail out
+    prevTotal = total;
+  }
+  const cleared = Object.values(bal).every(v => v <= 0.5);
+  return { months: cleared ? month : null, perAccount: payoffMonth, cleared };
+}
+
+function monthsFromNow(n) {
+  const d = new Date();
+  d.setMonth(d.getMonth() + n);
+  return d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+}
+
 /* ---------------- PROJECT SAVINGS CASCADE ---------------- */
 // Same waterfall idea as the debt plan, applied to projects: fill the
 // budget gap of the lowest priority-number project first, then move
@@ -804,6 +1051,11 @@ function renderDashboard() {
   const projectsBudgeted = projects.reduce((s, p) => s + (Number(p.budgetAllocated) || 0), 0);
   const projectsSpent = projects.reduce((s, p) => s + (Number(p.budgetSpent) || 0), 0);
 
+  const cardAccounts = accounts.filter(a => a.type === 'card' && Number(a.creditLimit) > 0);
+  const totalCardBalance = cardAccounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
+  const totalCardLimit = cardAccounts.reduce((s, a) => s + (Number(a.creditLimit) || 0), 0);
+  const utilization = totalCardLimit > 0 ? (totalCardBalance / totalCardLimit) * 100 : null;
+
   const cards = document.getElementById('dashboardCards');
   cards.innerHTML = `
     <div class="stat-card negative">
@@ -829,6 +1081,10 @@ function renderDashboard() {
     <div class="stat-card">
       <div class="label">Projects Spent</div>
       <div class="value">${fmtMoney(projectsSpent)}</div>
+    </div>
+    <div class="stat-card ${utilization !== null && utilization > 30 ? 'negative' : 'positive'}">
+      <div class="label">Credit Utilization</div>
+      <div class="value">${utilization !== null ? utilization.toFixed(1) + '%' : '—'}</div>
     </div>
   `;
 
@@ -873,7 +1129,17 @@ function renderDashboard() {
         Of your $${extra.toFixed(0)}/mo extra: <strong>${fmtMoney(debtExtra)}</strong> to debt,
         <strong>${fmtMoney(projectExtra)}</strong> to project savings.
       </p>
-      ${programNote}${planTable}`;
+      ${programNote}${planTable}
+      ${(() => {
+        if (plan.length === 0) return '';
+        const proj = projectDebtPayoff(debtExtra);
+        if (!proj.cleared) return `<p style="font-size:12.5px;color:var(--ink-soft);margin:12px 0 0;">At this pace, these accounts won't clear within 40 years — increase the extra amount above.</p>`;
+        return `<p style="font-size:12.5px;color:var(--ink-soft);margin:12px 0 0;">
+          At $${debtExtra.toFixed(0)}/mo extra, these accounts are debt-free by <strong>${monthsFromNow(proj.months)}</strong>
+          (${proj.months} month${proj.months === 1 ? '' : 's'}).
+        </p>`;
+      })()}
+    `;
   }
 
   const projectPlan = computeProjectSavingsPlan(projectExtra);
@@ -898,9 +1164,55 @@ function renderDashboard() {
         </tbody>
       </table>`;
   }
+
+  updateCashFlowSnapshot(totalDebt, totalIncome, totalExpenses, netFree);
+  renderCashFlowChart();
+}
+
+// Upserts one snapshot per calendar month (keyed by YYYY-MM), so opening
+// the app periodically builds a free-cash trend automatically — no manual
+// logging step required.
+async function updateCashFlowSnapshot(totalDebt, totalIncome, totalExpenses, netFree) {
+  const now = new Date();
+  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  try {
+    await setDoc(doc(db, 'cashFlowHistory', monthKey), {
+      date: monthKey, totalDebt, totalIncome, totalExpenses, netFree,
+    });
+  } catch (e) { /* non-critical, fail silently */ }
 }
 
 /* ---------------- BALANCE CHART ---------------- */
+let cashFlowChartInstance = null;
+function renderCashFlowChart() {
+  const ctx = document.getElementById('cashFlowChart');
+  if (!ctx) return;
+  const sorted = cashFlowHistory.slice().sort((a, b) => a.date.localeCompare(b.date));
+  if (cashFlowChartInstance) cashFlowChartInstance.destroy();
+  if (sorted.length < 2) { return; } // need at least 2 points for a trend to mean anything
+  cashFlowChartInstance = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: sorted.map(s => s.date),
+      datasets: [{
+        label: 'Free Cash / Mo.',
+        data: sorted.map(s => s.netFree),
+        borderColor: '#34513A',
+        backgroundColor: '#34513A',
+        tension: 0.15,
+      }],
+    },
+    options: {
+      responsive: true,
+      scales: {
+        y: { grid: { color: '#D6D0C0' }, ticks: { callback: v => '$' + v.toLocaleString() } },
+        x: { grid: { color: '#D6D0C0' } },
+      },
+      plugins: { legend: { display: false } },
+    },
+  });
+}
+
 let balanceChartInstance = null;
 function renderBalanceChart() {
   const ctx = document.getElementById('balanceChart');
@@ -1008,10 +1320,12 @@ const INCOME_FIELDS = [
   { key: 'item', label: 'Item', type: 'text' },
   { key: 'amount', label: 'Amount', type: 'number' },
   { key: 'frequency', label: 'Frequency', type: 'select', options: ['weekly', 'biweekly', 'semimonthly', 'monthly', 'yearly'] },
+  { key: 'nextDate', label: 'Next Pay Date (for calendar)', type: 'date' },
 ];
 const EXPENSE_FIELDS = [
   { key: 'item', label: 'Item', type: 'text' },
   { key: 'amount', label: 'Amount', type: 'number' },
+  { key: 'dueDay', label: 'Due Day of Month (1-31, for calendar)', type: 'number' },
 ];
 const BIWEEKLY_EXPENSE_FIELDS = [
   { key: 'item', label: 'Item', type: 'text' },
@@ -1121,7 +1435,34 @@ window.deleteAccount = (id) => deleteRow('accounts', id);
 function renderAccounts() {
   const el = document.getElementById('accountsTable');
   if (accounts.length === 0) { el.innerHTML = `<div class="empty-state">No cards or loans yet. Add one, or import from Excel.</div>`; return; }
-  const rows = sortRows(accounts, 'accounts', 'name');
+
+  // Keep the owner dropdown in sync with whatever owners currently exist,
+  // without losing the user's current selection.
+  const ownerSel = document.getElementById('accountOwnerFilter');
+  const currentOwner = ownerSel.value;
+  const owners = [...new Set(accounts.map(a => a.owner).filter(Boolean))].sort();
+  ownerSel.innerHTML = `<option value="">All owners</option>` + owners.map(o => `<option value="${o}">${o}</option>`).join('');
+  if (owners.includes(currentOwner)) ownerSel.value = currentOwner;
+
+  const nameQuery = document.getElementById('accountNameFilter').value.trim().toLowerCase();
+  const ownerFilter = ownerSel.value;
+  const typeFilter = document.getElementById('accountTypeFilter').value;
+  const programFilter = document.getElementById('accountProgramFilter').value;
+
+  let filtered = accounts.filter(a => {
+    if (nameQuery && !(a.name || '').toLowerCase().includes(nameQuery)) return false;
+    if (ownerFilter && a.owner !== ownerFilter) return false;
+    if (typeFilter && a.type !== typeFilter) return false;
+    if (programFilter === 'yes' && !a.inProgram) return false;
+    if (programFilter === 'no' && a.inProgram) return false;
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    el.innerHTML = `<div class="empty-state">No cards or loans match these filters.</div>`;
+    return;
+  }
+  const rows = sortRows(filtered, 'accounts', 'name');
   el.innerHTML = `
     <table class="ledger"><thead><tr>
       <th onclick="toggleSort('accounts','owner',renderAccounts)">Owner</th>
@@ -1464,6 +1805,22 @@ function renderProjects() {
 /* ============================================================
    IMPORT — Excel/CSV upload, column mapping, preview, commit
    ============================================================ */
+/* ---------------- BACKUP EXPORT ---------------- */
+window.exportAllData = function () {
+  const wb = XLSX.utils.book_new();
+  const sheets = {
+    Accounts: accounts, BalanceHistory: balanceHistory, Income: income,
+    Expenses: expenses, Projects: projects, CashFlowHistory: cashFlowHistory,
+  };
+  Object.entries(sheets).forEach(([name, rows]) => {
+    const clean = rows.map(({ id, ...rest }) => rest); // drop Firestore doc ids, not meaningful outside the app
+    const ws = XLSX.utils.json_to_sheet(clean.length ? clean : [{}]);
+    XLSX.utils.book_append_sheet(wb, ws, name);
+  });
+  const dateStr = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(wb, `household-ledger-backup-${dateStr}.xlsx`);
+};
+
 const IMPORT_TARGETS = {
   account: { schema: ACCOUNT_FIELDS, collectionName: 'accounts', extra: {} },
   balanceHistory: { schema: BALANCE_HISTORY_FIELDS, collectionName: 'balanceHistory', extra: {} },
@@ -1483,6 +1840,20 @@ document.getElementById('importTarget').addEventListener('change', () => {
   document.getElementById('importConfirmBtn').style.display = 'none';
   if (importParsedRows.length) buildMappingUI();
 });
+
+window.toggleImportOwnerField = function () {
+  const targetKey = document.getElementById('importTarget').value;
+  const wrap = document.getElementById('importOwnerField');
+  if (targetKey === 'balanceHistory') {
+    wrap.style.display = 'block';
+    const sel = document.getElementById('importOwnerSelect');
+    const owners = [...new Set(accounts.map(a => a.owner).filter(Boolean))].sort();
+    sel.innerHTML = `<option value="">All owners</option>` + owners.map(o => `<option value="${o}">${o}</option>`).join('');
+  } else {
+    wrap.style.display = 'none';
+    document.getElementById('importOwnerSelect').value = '';
+  }
+};
 
 function handleImportFile(e) {
   const file = e.target.files[0];
@@ -1564,8 +1935,13 @@ function mapRows(target, rawRows) {
       else if (f.type === 'checkbox') val = ['true', 'yes', '1', 'x', true].includes(typeof val === 'string' ? val.toLowerCase() : val);
       else if (f.type === 'date' && val instanceof Date) val = val.toISOString().slice(0, 10);
       else if (f.type === 'accountSelect') {
-        // match balance-history "Card" text against existing account names
-        const match = accounts.find(a => a.name && String(val).trim().toLowerCase() === a.name.trim().toLowerCase());
+        // match balance-history "Card" text against existing account names —
+        // scoped to the selected owner, so two people's cards with similar
+        // names can't cross-match.
+        const ownerSel = document.getElementById('importOwnerSelect');
+        const ownerFilter = ownerSel ? ownerSel.value : '';
+        const pool = ownerFilter ? accounts.filter(a => a.owner === ownerFilter) : accounts;
+        const match = pool.find(a => a.name && String(val).trim().toLowerCase() === a.name.trim().toLowerCase());
         val = match ? match.id : '';
       }
       row[f.key] = val;
