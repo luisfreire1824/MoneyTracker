@@ -503,7 +503,10 @@
       <div class="panel">
         <div class="toolbar">
           <h2 style="margin:0;">House Projects</h2>
-          <button class="btn" onclick="openProjectModal()">+ Add Project</button>
+          <div class="filters">
+            <button class="btn-ghost btn" onclick="openProjectPasteModal()">Paste Import</button>
+            <button class="btn" onclick="openProjectModal()">+ Add Project</button>
+          </div>
         </div>
         <p class="panel-sub">Sort by any column. No formula &mdash; you and Bibi call the priority.</p>
         <div class="toolbar">
@@ -1061,6 +1064,7 @@ function openModal(title, schema, collectionName, existing, extraFields) {
       ${f.type === 'checkbox' ? `<label for="f_${f.key}" style="margin:0;text-transform:none;">${f.label}</label>` : ''}
     </div>`).join('');
   document.getElementById('modalBackdrop').classList.add('active');
+  document.getElementById('modalSaveBtn').textContent = 'Save';
   document.getElementById('modalSaveBtn').onclick = saveModal;
 }
 
@@ -1341,6 +1345,72 @@ window.openProjectModal = function (existing) {
 };
 window.editProject = (id) => window.openProjectModal(projects.find(p => p.id === id));
 window.deleteProject = (id) => deleteRow('projects', id);
+
+/* ---------------- PASTE IMPORT (Projects) ---------------- */
+// Paste tab-separated rows (straight from a spreadsheet, or a plain-text
+// block): Name, Effort, Cost Estimate, Notes — one project per line.
+window.openProjectPasteModal = function () {
+  modalContext = { paste: true };
+  document.getElementById('modalTitle').textContent = 'Paste Import — Projects';
+  document.getElementById('modalFields').innerHTML = `
+    <p style="font-size:12.5px;color:var(--ink-soft);margin:0 0 10px;">
+      One project per line, values separated by tabs — paste straight from a spreadsheet
+      or a plain-text block. Column order: <strong>Name, Effort, Cost Estimate, Notes</strong>.
+      Effort should be low/medium/high; anything else defaults to medium. Status defaults to "planned" —
+      edit individual projects afterward to change it.
+    </p>
+    <div class="field">
+      <textarea id="pasteArea" rows="10" style="width:100%;font-family:var(--mono);font-size:12.5px;" placeholder="Fix handrail&#9;Low&#9;50&#9;Bracket and screws"></textarea>
+    </div>
+    <div id="pastePreview"></div>`;
+  document.getElementById('modalBackdrop').classList.add('active');
+  document.getElementById('modalSaveBtn').textContent = 'Preview';
+  document.getElementById('modalSaveBtn').onclick = previewProjectPaste;
+};
+
+function parsePasteRows() {
+  const raw = document.getElementById('pasteArea').value;
+  const validEffort = ['low', 'medium', 'high'];
+  return raw.split('\n').map(l => l.trim()).filter(Boolean).map(line => {
+    const cols = line.includes('\t') ? line.split('\t') : line.split(/ {2,}/);
+    const effortRaw = (cols[1] || '').trim().toLowerCase();
+    return {
+      name: (cols[0] || '').trim(),
+      effort: validEffort.includes(effortRaw) ? effortRaw : 'medium',
+      costEstimate: cols[2] ? Number(String(cols[2]).replace(/[^0-9.]/g, '')) || null : null,
+      notes: (cols[3] || '').trim(),
+      status: 'planned',
+    };
+  }).filter(r => r.name);
+}
+
+function previewProjectPaste() {
+  const rows = parsePasteRows();
+  const previewEl = document.getElementById('pastePreview');
+  if (rows.length === 0) {
+    previewEl.innerHTML = `<div class="empty-state">No rows detected — check the paste is tab-separated.</div>`;
+    return;
+  }
+  previewEl.innerHTML = `
+    <p style="font-size:12.5px;color:var(--ink-soft);margin:14px 0 8px;">Preview — ${rows.length} project(s):</p>
+    <table class="ledger"><thead><tr><th>Name</th><th>Effort</th><th class="num">Cost</th><th>Notes</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td>${r.name}</td><td>${r.effort}</td><td class="num">${r.costEstimate ? fmtMoney(r.costEstimate) : '—'}</td><td>${r.notes || '—'}</td></tr>`).join('')}
+    </tbody></table>`;
+  document.getElementById('modalSaveBtn').textContent = 'Confirm Import';
+  document.getElementById('modalSaveBtn').onclick = confirmProjectPaste;
+}
+
+async function confirmProjectPaste() {
+  const rows = parsePasteRows();
+  const batch = writeBatch(db);
+  rows.forEach(r => {
+    const ref = doc(collection(db, 'projects'));
+    batch.set(ref, r);
+  });
+  await batch.commit();
+  closeModal();
+  alert(`Imported ${rows.length} project(s). Set Priority Rank on each when you're ready.`);
+}
 
 const STATUS_STAMP = {
   idea: '', planned: 'brass', 'in-progress': 'brass', done: 'green'
