@@ -505,6 +505,7 @@
           <h2 style="margin:0;">House Projects</h2>
           <div class="filters">
             <button class="btn-ghost btn" onclick="openProjectPasteModal()">Paste Import</button>
+            <button class="btn-ghost btn" onclick="clearProjects()">Clear All</button>
             <button class="btn" onclick="openProjectModal()">+ Add Project</button>
           </div>
         </div>
@@ -1345,6 +1346,14 @@ window.openProjectModal = function (existing) {
 };
 window.editProject = (id) => window.openProjectModal(projects.find(p => p.id === id));
 window.deleteProject = (id) => deleteRow('projects', id);
+
+window.clearProjects = async function () {
+  if (projects.length === 0) { alert('No projects to clear.'); return; }
+  if (!confirm(`Delete all ${projects.length} project(s)? This can't be undone.`)) return;
+  const batch = writeBatch(db);
+  projects.forEach(p => batch.delete(doc(db, 'projects', p.id)));
+  await batch.commit();
+};
 
 /* ---------------- PASTE IMPORT (Projects) ---------------- */
 // Paste tab-separated rows (straight from a spreadsheet, or a plain-text
