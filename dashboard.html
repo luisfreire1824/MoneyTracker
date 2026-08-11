@@ -482,7 +482,7 @@
         <div class="toolbar">
           <h2 style="margin:0;">Balance History Log</h2>
           <div class="filters">
-            <button class="btn-ghost btn" onclick="openBulkBalanceModal()">Biweekly Update (All Cards)</button>
+            <button class="btn-ghost btn" onclick="openBulkBalanceModal()">Biweekly Update</button>
             <button class="btn" onclick="openBalanceHistoryModal()">+ Add Entry</button>
           </div>
         </div>
@@ -510,6 +510,18 @@
           </div>
         </div>
         <div id="monthlyExpenseTable" class="table-wrap"></div>
+      </div>
+
+      <div class="panel">
+        <div class="toolbar">
+          <h2 style="margin:0;">Semimonthly Expenses</h2>
+          <div class="filters">
+            <button class="btn-ghost btn" onclick="clearExpenses('semimonthly')">Clear All</button>
+            <button class="btn" onclick="openExpenseModal('semimonthly')">+ Add Expense</button>
+          </div>
+        </div>
+        <p class="panel-sub">Twice a month — like a paycheck on the 1st and 15th. Different math than biweekly (2x/month, not every 14 days).</p>
+        <div id="semimonthlyExpenseTable" class="table-wrap"></div>
       </div>
 
       <div class="panel">
@@ -592,6 +604,7 @@
             <option value="balanceHistory">Balance history</option>
             <option value="income">Income</option>
             <option value="expenseMonthly">Monthly expenses</option>
+            <option value="expenseSemimonthly">Semimonthly expenses</option>
             <option value="expenseBiweekly">Biweekly card expenses</option>
           </select>
         </div>
@@ -684,14 +697,23 @@ let sortState = {}; // per-table current sort {key, dir}
 
 /* ---------------- AUTH ---------------- */
 window.handleLogin = async function () {
-  const email = document.getElementById('loginEmail').value.trim();
+  const email = document.getElementById('loginEmail').value.trim().toLowerCase();
   const password = document.getElementById('loginPassword').value;
   const errEl = document.getElementById('loginError');
   errEl.textContent = '';
   try {
     await signInWithEmailAndPassword(auth, email, password);
   } catch (e) {
-    errEl.textContent = 'Sign-in failed — check email and password.';
+    const messages = {
+      'auth/wrong-password': 'Incorrect password.',
+      'auth/invalid-credential': 'Incorrect email or password.',
+      'auth/user-not-found': 'No account with that email.',
+      'auth/invalid-email': 'That email address looks off.',
+      'auth/network-request-failed': 'Network error — check your connection.',
+      'auth/too-many-requests': 'Too many failed attempts — Firebase has temporarily locked this out as a brute-force protection. Wait a few minutes and try again, or reset the password in the Firebase console.',
+    };
+    console.error('Sign-in error:', e.code, e.message);
+    errEl.textContent = messages[e.code] || `Sign-in failed (${e.code || 'unknown error'}).`;
   }
 };
 
@@ -847,6 +869,14 @@ function generateUpcomingEvents(rangeDays) {
     const anchor = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(Math.min(e.dueDay, 28)).padStart(2, '0')}`;
     monthlyOccurrencesInRange(anchor, today, rangeEnd).forEach(d =>
       events.push({ date: d, type: 'expense', label: e.item, amount: e.amount }));
+  });
+
+  expenses.filter(e => e.frequency === 'semimonthly' && (e.dueDay || e.dueDay2)).forEach(e => {
+    [e.dueDay, e.dueDay2].filter(Boolean).forEach(day => {
+      const anchor = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(Math.min(day, 28)).padStart(2, '0')}`;
+      monthlyOccurrencesInRange(anchor, today, rangeEnd).forEach(d =>
+        events.push({ date: d, type: 'expense', label: e.item, amount: e.amount }));
+    });
   });
 
   income.forEach(i => {
@@ -1327,6 +1357,12 @@ const EXPENSE_FIELDS = [
   { key: 'amount', label: 'Amount', type: 'number' },
   { key: 'dueDay', label: 'Due Day of Month (1-31, for calendar)', type: 'number' },
 ];
+const SEMIMONTHLY_EXPENSE_FIELDS = [
+  { key: 'item', label: 'Item', type: 'text' },
+  { key: 'amount', label: 'Amount (per occurrence)', type: 'number' },
+  { key: 'dueDay', label: 'First Due Day (1-31)', type: 'number' },
+  { key: 'dueDay2', label: 'Second Due Day (1-31)', type: 'number' },
+];
 const BIWEEKLY_EXPENSE_FIELDS = [
   { key: 'item', label: 'Item', type: 'text' },
   { key: 'amount', label: 'Amount', type: 'number' },
@@ -1427,7 +1463,7 @@ async function deleteRow(collectionName, id) {
 
 /* ---------------- ACCOUNTS ---------------- */
 window.openAccountModal = function (existing) {
-  openModal(existing ? 'Edit Account' : 'Add Account', ACCOUNT_FIELDS, 'accounts', existing);
+  openModal(existing && existing.id ? 'Edit Account' : 'Add Account', ACCOUNT_FIELDS, 'accounts', existing);
 };
 window.editAccount = (id) => window.openAccountModal(accounts.find(a => a.id === id));
 window.deleteAccount = (id) => deleteRow('accounts', id);
@@ -1440,18 +1476,28 @@ function renderAccounts() {
   // without losing the user's current selection.
   const ownerSel = document.getElementById('accountOwnerFilter');
   const currentOwner = ownerSel.value;
-  const owners = [...new Set(accounts.map(a => a.owner).filter(Boolean))].sort();
+  // Dedupe owners case/whitespace-insensitively (Excel entries and manual
+  // entries don't always match casing exactly), but keep the first-seen
+  // casing for display.
+  const ownerMap = new Map();
+  accounts.forEach(a => {
+    const raw = (a.owner || '').trim();
+    if (!raw) return;
+    const key = raw.toLowerCase();
+    if (!ownerMap.has(key)) ownerMap.set(key, raw);
+  });
+  const owners = [...ownerMap.values()].sort();
   ownerSel.innerHTML = `<option value="">All owners</option>` + owners.map(o => `<option value="${o}">${o}</option>`).join('');
   if (owners.includes(currentOwner)) ownerSel.value = currentOwner;
 
   const nameQuery = document.getElementById('accountNameFilter').value.trim().toLowerCase();
-  const ownerFilter = ownerSel.value;
+  const ownerFilter = ownerSel.value.trim().toLowerCase();
   const typeFilter = document.getElementById('accountTypeFilter').value;
   const programFilter = document.getElementById('accountProgramFilter').value;
 
   let filtered = accounts.filter(a => {
     if (nameQuery && !(a.name || '').toLowerCase().includes(nameQuery)) return false;
-    if (ownerFilter && a.owner !== ownerFilter) return false;
+    if (ownerFilter && (a.owner || '').trim().toLowerCase() !== ownerFilter) return false;
     if (typeFilter && a.type !== typeFilter) return false;
     if (programFilter === 'yes' && !a.inProgram) return false;
     if (programFilter === 'no' && a.inProgram) return false;
@@ -1508,17 +1554,36 @@ window.deleteBalanceHistory = (id) => deleteRow('balanceHistory', id);
 window.openBulkBalanceModal = function () {
   if (accounts.length === 0) { alert('Add a card or loan first.'); return; }
   modalContext = { bulk: true };
-  document.getElementById('modalTitle').textContent = 'Biweekly Update — All Cards';
+  document.getElementById('modalTitle').textContent = 'Biweekly Update';
   const today = new Date().toISOString().slice(0, 10);
+  const owners = [...new Set(accounts.map(a => (a.owner || '').trim()).filter(Boolean))].sort();
   document.getElementById('modalFields').innerHTML = `
     <div class="field">
       <label for="bulkDate">Date</label>
       <input type="date" id="bulkDate" value="${today}">
     </div>
-    <table class="ledger" style="margin-top:6px;">
+    <div class="field">
+      <label for="bulkOwnerFilter">Whose cards?</label>
+      <select id="bulkOwnerFilter" onchange="renderBulkBalanceRows()">
+        <option value="">All owners</option>
+        ${owners.map(o => `<option value="${o}">${o}</option>`).join('')}
+      </select>
+    </div>
+    <div id="bulkBalanceRows"></div>`;
+  renderBulkBalanceRows();
+  document.getElementById('modalBackdrop').classList.add('active');
+  document.getElementById('modalSaveBtn').onclick = saveBulkBalance;
+};
+
+window.renderBulkBalanceRows = function () {
+  const ownerFilter = document.getElementById('bulkOwnerFilter').value;
+  const rows = ownerFilter ? accounts.filter(a => (a.owner || '').trim() === ownerFilter) : accounts;
+  document.getElementById('bulkBalanceRows').innerHTML = rows.length === 0
+    ? `<div class="empty-state">No cards for this owner.</div>`
+    : `<table class="ledger" style="margin-top:6px;">
       <thead><tr><th>Card</th><th class="num">Balance</th><th class="num">Minimum Due</th></tr></thead>
       <tbody>
-        ${accounts.map(a => `
+        ${rows.map(a => `
           <tr>
             <td>${a.name}</td>
             <td><input type="number" id="bulk_bal_${a.id}" value="${a.balance ?? ''}" style="width:100px;text-align:right;"></td>
@@ -1526,18 +1591,18 @@ window.openBulkBalanceModal = function () {
           </tr>`).join('')}
       </tbody>
     </table>`;
-  document.getElementById('modalBackdrop').classList.add('active');
-  document.getElementById('modalSaveBtn').onclick = saveBulkBalance;
 };
 
 async function saveBulkBalance() {
   const date = document.getElementById('bulkDate').value;
   if (!date) { alert('Pick a date.'); return; }
+  const ownerFilter = document.getElementById('bulkOwnerFilter').value;
+  const rows = ownerFilter ? accounts.filter(a => (a.owner || '').trim() === ownerFilter) : accounts;
   let count = 0;
-  for (const a of accounts) {
+  for (const a of rows) {
     const balEl = document.getElementById('bulk_bal_' + a.id);
     const minEl = document.getElementById('bulk_min_' + a.id);
-    if (balEl.value === '') continue; // skip blank rows
+    if (!balEl || balEl.value === '') continue; // skip blank rows
     const entry = {
       accountId: a.id,
       date,
@@ -1626,7 +1691,9 @@ function renderIncome() {
 
 /* ---------------- EXPENSES (monthly + biweekly share one collection) ---------------- */
 window.openExpenseModal = function (frequency, existing) {
-  const schema = frequency === 'biweekly' ? BIWEEKLY_EXPENSE_FIELDS : EXPENSE_FIELDS;
+  const schema = frequency === 'biweekly' ? BIWEEKLY_EXPENSE_FIELDS
+    : frequency === 'semimonthly' ? SEMIMONTHLY_EXPENSE_FIELDS
+    : EXPENSE_FIELDS;
   const title = existing ? 'Edit Expense' : 'Add Expense';
   const prefill = existing || (frequency === 'biweekly' && settings.defaultCardId
     ? { accountId: settings.defaultCardId } : null);
@@ -1649,12 +1716,15 @@ window.clearExpenses = async function (frequency) {
 
 function expenseTableHTML(rows, frequency, tableKey, renderFn) {
   if (rows.length === 0) return `<div class="empty-state">No ${frequency} expenses yet.</div>`;
-  const total = rows.reduce((s, e) => s + (Number(e.amount) || 0), 0);
   const showCard = frequency === 'biweekly';
+  const showDueDays = frequency === 'semimonthly';
+  // "Amount" on a semimonthly row is per-occurrence; the monthly total is 2x that.
+  const monthlyTotal = rows.reduce((s, e) => s + monthlyEquivalent(Number(e.amount) || 0, frequency), 0);
   return `
     <table class="ledger"><thead><tr>
       <th onclick="toggleSort('${tableKey}','item',${renderFn})">Item</th>
-      <th class="num" onclick="toggleSort('${tableKey}','amount',${renderFn})">Amount</th>
+      <th class="num" onclick="toggleSort('${tableKey}','amount',${renderFn})">${showDueDays ? 'Amount (ea.)' : 'Amount'}</th>
+      ${showDueDays ? '<th>Due Days</th>' : ''}
       ${showCard ? '<th>Card</th>' : ''}
       <th></th>
     </tr></thead><tbody>
@@ -1663,6 +1733,7 @@ function expenseTableHTML(rows, frequency, tableKey, renderFn) {
         return `<tr>
           <td>${e.item || '—'}</td>
           <td class="num">${fmtMoney(e.amount)}</td>
+          ${showDueDays ? `<td>${e.dueDay || '—'} &amp; ${e.dueDay2 || '—'}</td>` : ''}
           ${showCard ? `<td>${acct ? acct.name : '—'}</td>` : ''}
           <td class="row-actions">
             <button onclick="editExpense('${e.id}')">Edit</button>
@@ -1670,14 +1741,20 @@ function expenseTableHTML(rows, frequency, tableKey, renderFn) {
           </td>
         </tr>`;
       }).join('')}
-      <tr><td style="font-weight:600;">Total</td><td class="num" style="font-weight:600;">${fmtMoney(total)}</td>${showCard ? '<td></td>' : ''}<td></td></tr>
+      <tr>
+        <td style="font-weight:600;">Monthly Total</td>
+        <td class="num" style="font-weight:600;">${fmtMoney(monthlyTotal)}</td>
+        ${showDueDays ? '<td></td>' : ''}${showCard ? '<td></td>' : ''}<td></td>
+      </tr>
     </tbody></table>`;
 }
 
 function renderExpenses() {
   const monthly = sortRows(expenses.filter(e => e.frequency === 'monthly'), 'expMonthly', 'item');
+  const semimonthly = sortRows(expenses.filter(e => e.frequency === 'semimonthly'), 'expSemimonthly', 'item');
   const biweekly = sortRows(expenses.filter(e => e.frequency === 'biweekly'), 'expBiweekly', 'item');
   document.getElementById('monthlyExpenseTable').innerHTML = expenseTableHTML(monthly, 'monthly', 'expMonthly', 'renderExpenses');
+  document.getElementById('semimonthlyExpenseTable').innerHTML = expenseTableHTML(semimonthly, 'semimonthly', 'expSemimonthly', 'renderExpenses');
   document.getElementById('biweeklyExpenseTable').innerHTML = expenseTableHTML(biweekly, 'biweekly', 'expBiweekly', 'renderExpenses');
 }
 
@@ -1826,6 +1903,7 @@ const IMPORT_TARGETS = {
   balanceHistory: { schema: BALANCE_HISTORY_FIELDS, collectionName: 'balanceHistory', extra: {} },
   income: { schema: INCOME_FIELDS, collectionName: 'income', extra: {} },
   expenseMonthly: { schema: EXPENSE_FIELDS, collectionName: 'expenses', extra: { frequency: 'monthly' } },
+  expenseSemimonthly: { schema: SEMIMONTHLY_EXPENSE_FIELDS, collectionName: 'expenses', extra: { frequency: 'semimonthly' } },
   expenseBiweekly: { schema: BIWEEKLY_EXPENSE_FIELDS, collectionName: 'expenses', extra: { frequency: 'biweekly' } },
 };
 
@@ -1907,7 +1985,24 @@ window.buildImportPreview = function () {
   const target = IMPORT_TARGETS[targetKey];
   const mapped = mapRows(target, importParsedRows.slice(0, 5));
   const previewEl = document.getElementById('importPreview');
+  let unmatchedHTML = '';
+  if (targetKey === 'balanceHistory') {
+    const unmatched = getUnmatchedCardNames();
+    if (unmatched.length) {
+      unmatchedHTML = `
+        <div class="empty-state" style="text-align:left;background:var(--rust-bg);border:1px solid var(--rust);border-radius:3px;padding:14px;margin-bottom:14px;">
+          <p style="margin:0 0 10px;color:var(--rust);font-weight:600;">${unmatched.length} card name(s) in this file don't match an existing account:</p>
+          ${unmatched.map(name => `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <span>${name}</span>
+              <button class="btn-ghost btn" style="padding:5px 10px;font-size:12px;" onclick="quickAddAccountFromImport('${name.replace(/'/g, "\\'")}')">+ Add Account</button>
+            </div>`).join('')}
+          <p style="margin:10px 0 0;font-size:12px;">Add the missing ones, then click Preview again — rows for unmatched cards are skipped, not lost.</p>
+        </div>`;
+    }
+  }
   previewEl.innerHTML = `
+    ${unmatchedHTML}
     <p style="font-size:12.5px;color:var(--ink-soft);margin:16px 0 10px;">Preview (first 5 rows):</p>
     <table class="ledger"><thead><tr>
       ${target.schema.map(f => `<th>${f.label}</th>`).join('')}
@@ -1915,6 +2010,26 @@ window.buildImportPreview = function () {
       ${mapped.map(row => `<tr>${target.schema.map(f => `<td>${row[f.key] ?? ''}</td>`).join('')}</tr>`).join('')}
     </tbody></table>`;
   document.getElementById('importConfirmBtn').style.display = 'inline-block';
+};
+
+// Scans the full uploaded file (not just the 5-row preview) for "Card"
+// values that don't match any existing account, scoped to the selected
+// owner if one's chosen.
+function getUnmatchedCardNames() {
+  const sourceCol = importFieldMap['accountId'];
+  if (!sourceCol) return [];
+  const ownerSel = document.getElementById('importOwnerSelect');
+  const ownerFilter = ownerSel ? ownerSel.value.trim().toLowerCase() : '';
+  const pool = ownerFilter ? accounts.filter(a => (a.owner || '').trim().toLowerCase() === ownerFilter) : accounts;
+  const names = importParsedRows.map(r => String(r[sourceCol] || '').trim()).filter(Boolean);
+  const unmatched = names.filter(name => !pool.some(a => a.name && a.name.trim().toLowerCase() === name.toLowerCase()));
+  return [...new Set(unmatched)];
+}
+
+window.quickAddAccountFromImport = function (name) {
+  const ownerSel = document.getElementById('importOwnerSelect');
+  const owner = ownerSel ? ownerSel.value : '';
+  openAccountModal({ name, owner });
 };
 
 function mapRows(target, rawRows) {
@@ -1937,10 +2052,10 @@ function mapRows(target, rawRows) {
       else if (f.type === 'accountSelect') {
         // match balance-history "Card" text against existing account names —
         // scoped to the selected owner, so two people's cards with similar
-        // names can't cross-match.
+        // names can't cross-match. Trimmed + case-insensitive on both sides.
         const ownerSel = document.getElementById('importOwnerSelect');
-        const ownerFilter = ownerSel ? ownerSel.value : '';
-        const pool = ownerFilter ? accounts.filter(a => a.owner === ownerFilter) : accounts;
+        const ownerFilter = ownerSel ? ownerSel.value.trim().toLowerCase() : '';
+        const pool = ownerFilter ? accounts.filter(a => (a.owner || '').trim().toLowerCase() === ownerFilter) : accounts;
         const match = pool.find(a => a.name && String(val).trim().toLowerCase() === a.name.trim().toLowerCase());
         val = match ? match.id : '';
       }
@@ -1956,7 +2071,7 @@ window.confirmImport = async function () {
   const mapped = mapRows(target, importParsedRows);
   if (targetKey === 'balanceHistory') {
     const missing = mapped.filter(r => !r.accountId).length;
-    if (missing > 0 && !confirm(`${missing} row(s) don't match an existing card/loan name and will be skipped. Continue?`)) return;
+    if (missing > 0 && !confirm(`${missing} row(s) still don't match an existing card/loan and will be skipped. Continue?`)) return;
   }
   const batch = writeBatch(db);
   let count = 0;
