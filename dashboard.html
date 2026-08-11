@@ -491,8 +491,11 @@
       </div>
 
       <div class="panel">
-        <h2>Free Cash Trend</h2>
-        <p class="panel-sub">Logged automatically each month you open the app.</p>
+        <div class="toolbar">
+          <h2 style="margin:0;">Free Cash Trend</h2>
+          <button class="btn-ghost btn" id="cashFlowRangeToggle" onclick="toggleCashFlowRange()">Show Full History</button>
+        </div>
+        <p class="panel-sub">Today's income/expense settings applied historically, minus what was actually paid to cards each month and any logged one-time expenses. Income/expenses aren't tracked historically, so this assumes they were the same as today — only the debt payments and one-time costs are real per-month figures.</p>
         <canvas id="cashFlowChart" height="90"></canvas>
       </div>
 
@@ -851,15 +854,15 @@ function startListeners() {
   }));
   unsubs.push(onSnapshot(collection(db, 'balanceHistory'), snap => {
     balanceHistory = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderBalanceHistory(); renderCardTrendChart(); renderNext7Days(); renderSignOffBanner(); renderDashboard();
+    renderBalanceHistory(); renderCardTrendChart(); renderNext7Days(); renderSignOffBanner(); renderDashboard(); renderCashFlowChart(); renderTotalDebtChart();
   }));
   unsubs.push(onSnapshot(collection(db, 'income'), snap => {
     income = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderIncome(); renderDashboard(); renderNext7Days();
+    renderIncome(); renderDashboard(); renderNext7Days(); renderCashFlowChart();
   }));
   unsubs.push(onSnapshot(collection(db, 'expenses'), snap => {
     expenses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderExpenses(); renderDashboard(); renderNext7Days(); renderCategoryChart();
+    renderExpenses(); renderDashboard(); renderNext7Days(); renderCategoryChart(); renderCashFlowChart();
   }));
   unsubs.push(onSnapshot(collection(db, 'projects'), snap => {
     projects = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -867,7 +870,6 @@ function startListeners() {
   }));
   unsubs.push(onSnapshot(collection(db, 'cashFlowHistory'), snap => {
     cashFlowHistory = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderCashFlowChart(); renderTotalDebtChart();
   }));
   unsubs.push(onSnapshot(collection(db, 'savings'), snap => {
     savings = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -875,7 +877,7 @@ function startListeners() {
   }));
   unsubs.push(onSnapshot(collection(db, 'oneTimeExpenses'), snap => {
     oneTimeExpenses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderOneTimeExpenses();
+    renderOneTimeExpenses(); renderCashFlowChart();
   }));
   getDoc(doc(db, 'settings', 'main')).then(snap => {
     if (snap.exists()) {
@@ -1697,27 +1699,77 @@ function setChartEmptyState(ctx, message) {
   }
 }
 
+// Reconstructs a historical free-cash figure per month, using what can
+// actually be known about the past: current income and recurring-expense
+// settings (there's no historical log of what those were before, so
+// today's numbers are applied consistently across all months) minus what
+// was ACTUALLY paid to cards that month (from balanceHistory.paymentAmount,
+// which varies month to month based on real sign-offs) minus any one-time
+// expenses logged with a date in that month. Months with no one-time
+// expenses are assumed to have had none — not "unknown."
+function getMonthlyFreeCashSeries() {
+  const totalIncome = income.reduce((s, i) => s + monthlyEquivalent(Number(i.amount) || 0, i.frequency), 0);
+  const totalExpenses = expenses.filter(e => e.frequency !== 'biweekly')
+    .reduce((s, e) => s + monthlyEquivalent(Number(e.amount) || 0, e.frequency), 0);
+
+  const months = new Set();
+  balanceHistory.forEach(h => months.add(h.date.slice(0, 7)));
+  oneTimeExpenses.forEach(e => months.add(e.date.slice(0, 7)));
+  const sortedMonths = [...months].sort();
+
+  return sortedMonths.map(month => {
+    const paidThatMonth = balanceHistory.filter(h => h.date.slice(0, 7) === month)
+      .reduce((s, h) => s + (Number(h.paymentAmount) || 0), 0);
+    const oneTimeThatMonth = oneTimeExpenses.filter(e => e.date.slice(0, 7) === month)
+      .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    return {
+      month, paidThatMonth, oneTimeThatMonth,
+      netFree: totalIncome - totalExpenses - paidThatMonth - oneTimeThatMonth,
+    };
+  });
+}
+
+let cashFlowShowFull = false;
+window.toggleCashFlowRange = function () {
+  cashFlowShowFull = !cashFlowShowFull;
+  document.getElementById('cashFlowRangeToggle').textContent = cashFlowShowFull ? 'Show Last 6 Months' : 'Show Full History';
+  renderCashFlowChart();
+};
+
 function renderCashFlowChart() {
   const ctx = document.getElementById('cashFlowChart');
   if (!ctx) return;
-  const sorted = cashFlowHistory.slice().sort((a, b) => a.date.localeCompare(b.date));
+  let sorted = getMonthlyFreeCashSeries();
+  if (!cashFlowShowFull) sorted = sorted.slice(-6);
   if (cashFlowChartInstance) cashFlowChartInstance.destroy();
   if (sorted.length < 2) {
-    setChartEmptyState(ctx, 'Needs 2+ months of data to plot a trend — this fills in automatically as you keep using the app.');
+    setChartEmptyState(ctx, 'Needs card-payment history spanning 2+ months to plot a trend — log a couple of biweekly reviews and this fills in.');
     return;
   }
   setChartEmptyState(ctx, null);
+  const totals = sorted.map(s => s.netFree);
   cashFlowChartInstance = new Chart(ctx, {
     type: 'line',
     data: {
-      labels: sorted.map(s => s.date),
-      datasets: [{
-        label: 'Free Cash / Mo.',
-        data: sorted.map(s => s.netFree),
-        borderColor: '#34513A',
-        backgroundColor: '#34513A',
-        tension: 0.15,
-      }],
+      labels: sorted.map(s => s.month),
+      datasets: [
+        {
+          label: 'Free Cash / Mo.',
+          data: totals,
+          borderColor: '#34513A',
+          backgroundColor: '#34513A',
+          tension: 0.15,
+        },
+        {
+          label: '3-Month Avg',
+          data: rollingAverageByCount(totals, 3),
+          borderColor: '#5B6472',
+          backgroundColor: '#5B6472',
+          borderDash: [5, 4],
+          pointRadius: 0,
+          tension: 0.15,
+        },
+      ],
     },
     options: {
       responsive: true,
@@ -1725,7 +1777,7 @@ function renderCashFlowChart() {
         y: { grid: { color: '#D6D0C0' }, ticks: { callback: v => '$' + v.toLocaleString() } },
         x: { grid: { color: '#D6D0C0' } },
       },
-      plugins: { legend: { display: false } },
+      plugins: { legend: { position: 'bottom', labels: { font: { family: 'Inter' } } } },
     },
   });
 }
@@ -1765,11 +1817,11 @@ function renderTotalDebtChart() {
   const ctx = document.getElementById('totalDebtChart');
   if (!ctx) return;
   renderDashboardDebtStats();
-  let sorted = cashFlowHistory.slice().sort((a, b) => a.date.localeCompare(b.date));
+  let sorted = getMonthlyTotalDebtSeries();
   if (!totalDebtShowFull) sorted = sorted.slice(-6);
   if (totalDebtChartInstance) totalDebtChartInstance.destroy();
   if (sorted.length < 2) {
-    setChartEmptyState(ctx, 'Needs 2+ months of data to plot a trend — this fills in automatically as you keep using the app.');
+    setChartEmptyState(ctx, 'Needs balance history spanning 2+ months to plot a trend — log a couple of biweekly reviews and this fills in.');
     return;
   }
   setChartEmptyState(ctx, null);
@@ -1777,7 +1829,7 @@ function renderTotalDebtChart() {
   totalDebtChartInstance = new Chart(ctx, {
     type: 'line',
     data: {
-      labels: sorted.map(s => s.date),
+      labels: sorted.map(s => s.month),
       datasets: [
         {
           label: 'Total Debt',
@@ -1810,8 +1862,8 @@ function renderTotalDebtChart() {
 
 // Household-wide version of the per-card stats table: total balance across
 // every account, overall utilization, max/min total debt ever recorded
-// (from the monthly cashFlowHistory snapshots), and total paid YTD across
-// every card combined.
+// (from real balance history, not just the newer auto-snapshot feature),
+// and total paid YTD across every card combined.
 function renderDashboardDebtStats() {
   const el = document.getElementById('totalDebtStats');
   if (!el) return;
@@ -1820,7 +1872,7 @@ function renderDashboardDebtStats() {
   const totalCardBalance = cardAccounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
   const totalCardLimit = cardAccounts.reduce((s, a) => s + (Number(a.creditLimit) || 0), 0);
   const utilization = totalCardLimit > 0 ? (totalCardBalance / totalCardLimit) * 100 : null;
-  const debtSeries = cashFlowHistory.map(s => s.totalDebt).filter(v => typeof v === 'number');
+  const debtSeries = getMonthlyTotalDebtSeries().map(s => s.totalDebt);
   const maxBalance = debtSeries.length ? Math.max(...debtSeries) : null;
   const minBalance = debtSeries.length ? Math.min(...debtSeries) : null;
   const currentYear = new Date().getFullYear();
@@ -1908,6 +1960,29 @@ function getMonthlyCardSeries(accountId) {
     bucket.paid += e.paid;
   });
   return [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
+}
+
+// Household-wide version: sums every account's end-of-month balance, per
+// month, across all of real balance-history — not just the months since
+// the newer auto-snapshot feature existed. Accounts don't all get updated
+// on the same day, so a naive per-month sum would understate any month
+// where a given card had no entry; this forward-fills each account's last
+// known balance into months it wasn't touched, same as a real running total.
+function getMonthlyTotalDebtSeries() {
+  const allMonths = [...new Set(balanceHistory.map(h => h.date.slice(0, 7)))].sort();
+  if (allMonths.length === 0) return [];
+  return allMonths.map(month => {
+    const total = accounts.reduce((sum, a) => {
+      const series = getMonthlyCardSeries(a.id);
+      // last known balance at or before this month; 0 if the account has
+      // no history yet by this point (nothing to add for months before it
+      // started being tracked).
+      const upToMonth = series.filter(s => s.month <= month);
+      const balance = upToMonth.length ? upToMonth[upToMonth.length - 1].endBalance : 0;
+      return sum + balance;
+    }, 0);
+    return { month, totalDebt: total };
+  });
 }
 
 let cardTrendChartInstance = null;
