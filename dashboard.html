@@ -426,6 +426,12 @@
       </div>
 
       <div class="panel">
+        <h2>Card Debt-Free Progress</h2>
+        <p class="panel-sub">For cards with linked biweekly spending — is what's being paid actually outpacing what's being charged?</p>
+        <div id="cardDebtFreeTable" class="table-wrap"></div>
+      </div>
+
+      <div class="panel">
         <h2>Project Savings Plan</h2>
         <p class="panel-sub">Your project-side extra cascades to whichever project has the lowest priority number first, filling its budget gap before moving to the next.</p>
         <div id="projectPlanTable" class="table-wrap"></div>
@@ -471,7 +477,7 @@
             <select id="accountProgramFilter" onchange="renderAccounts()">
               <option value="">All (program or not)</option>
               <option value="yes">In program</option>
-              <option value="no">Not in program</option>
+              <option value="no" selected>Not in program</option>
             </select>
           </div>
         </div>
@@ -694,6 +700,19 @@ let settings = { monthlyExtra: 0, splitRatio: 70, defaultCardId: '' };
 
 let unsubs = [];
 let sortState = {}; // per-table current sort {key, dir}
+
+// renderAccounts/renderProjects/renderCalendar are called from inline HTML
+// attributes (onchange, oninput, onclick), which run in the global scope.
+// Plain `function` declarations inside a <script type="module"> are scoped
+// to the module, not attached to window — so those inline calls (and every
+// toggleSort(...) reference that passes one of these as an argument) were
+// silently failing with "not defined" before this exposure.
+window.renderAccounts = () => renderAccounts();
+window.renderProjects = () => renderProjects();
+window.renderCalendar = () => renderCalendar();
+window.renderBalanceHistory = () => renderBalanceHistory();
+window.renderIncome = () => renderIncome();
+window.renderExpenses = () => renderExpenses();
 
 /* ---------------- AUTH ---------------- */
 window.handleLogin = async function () {
@@ -1008,9 +1027,22 @@ function computeDebtPlan(extraAmount) {
 // Uses each account's normalAPR throughout for simplicity; the 0%-promo
 // pull-forward logic already front-loads those balances in the order,
 // so this is a close approximation, not a promo-aware simulation.
+// Biweekly expenses tagged with a Card feed that card's balance in real
+// life (you charge it, the balance grows). This sums that ongoing spend
+// per account, monthly-equivalent, so the payoff simulation can account
+// for a card that's still being actively used, not just paid down.
+function getMonthlySpendByAccount() {
+  const spend = {};
+  expenses.filter(e => e.frequency === 'biweekly' && e.accountId).forEach(e => {
+    spend[e.accountId] = (spend[e.accountId] || 0) + monthlyEquivalent(Number(e.amount) || 0, 'biweekly');
+  });
+  return spend;
+}
+
 function projectDebtPayoff(extraAmount) {
   const order = computeDebtPlan(0); // reuse the same priority order
   if (order.length === 0) return { months: 0, perAccount: {}, cleared: true };
+  const spendByAccount = getMonthlySpendByAccount();
   const bal = {}; order.forEach(a => { bal[a.id] = a.balance; });
   const payoffMonth = {};
   const MAX_MONTHS = 480; // 40-year safety cap
@@ -1021,6 +1053,7 @@ function projectDebtPayoff(extraAmount) {
     order.forEach(a => {
       if (bal[a.id] <= 0) return;
       bal[a.id] += bal[a.id] * ((a.normalAPR || 0) / 100 / 12);
+      bal[a.id] += spendByAccount[a.id] || 0; // ongoing charges, if any
       bal[a.id] -= Math.min(a.minPayment || 0, bal[a.id]);
     });
     let extra = Number(extraAmount) || 0;
@@ -1032,11 +1065,28 @@ function projectDebtPayoff(extraAmount) {
     }
     order.forEach(a => { if (bal[a.id] <= 0.5 && !payoffMonth[a.id]) payoffMonth[a.id] = month; });
     const total = Object.values(bal).reduce((s, v) => s + Math.max(v, 0), 0);
-    if (total >= prevTotal) break; // not decreasing — extra too small vs. interest, bail out
+    if (total >= prevTotal) break; // not decreasing — extra too small vs. interest/spend, bail out
     prevTotal = total;
   }
   const cleared = Object.values(bal).every(v => v <= 0.5);
   return { months: cleared ? month : null, perAccount: payoffMonth, cleared };
+}
+
+// Per-card view for cards with linked biweekly spend: is the payment
+// applied (minimum + this card's share of "extra") actually outpacing
+// what's being charged to it each month?
+function computeCardDebtFreeStatus(debtExtra) {
+  const spendByAccount = getMonthlySpendByAccount();
+  const plan = computeDebtPlan(debtExtra);
+  return Object.keys(spendByAccount).map(accountId => {
+    const account = accounts.find(a => a.id === accountId);
+    if (!account) return null;
+    const planEntry = plan.find(p => p.id === accountId);
+    const payment = (Number(account.minPayment) || 0) + (planEntry ? planEntry.extraAllocation : 0);
+    const monthlySpend = spendByAccount[accountId];
+    const netChange = monthlySpend - payment;
+    return { account, monthlySpend, payment, netChange, inPlan: !!planEntry };
+  }).filter(Boolean);
 }
 
 function monthsFromNow(n) {
@@ -1076,7 +1126,13 @@ function renderDashboard() {
   const totalDebt = accounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
   const totalMinPayments = accounts.reduce((s, a) => s + (Number(a.minPayment) || 0), 0);
   const totalIncome = income.reduce((s, i) => s + monthlyEquivalent(Number(i.amount) || 0, i.frequency), 0);
-  const totalExpenses = expenses.reduce((s, e) => s + monthlyEquivalent(Number(e.amount) || 0, e.frequency), 0);
+  // Biweekly card expenses are excluded here on purpose: that spending
+  // already shows up as growth in the linked card's balance, and paying
+  // that balance down (minPayment + extra, both already subtracted below/
+  // in the debt plan) is how it actually leaves your cash. Counting it
+  // again as a standalone expense would subtract the same dollars twice.
+  const totalExpenses = expenses.filter(e => e.frequency !== 'biweekly')
+    .reduce((s, e) => s + monthlyEquivalent(Number(e.amount) || 0, e.frequency), 0);
   const netFree = totalIncome - totalExpenses - totalMinPayments;
   const projectsBudgeted = projects.reduce((s, p) => s + (Number(p.budgetAllocated) || 0), 0);
   const projectsSpent = projects.reduce((s, p) => s + (Number(p.budgetSpent) || 0), 0);
@@ -1097,7 +1153,7 @@ function renderDashboard() {
       <div class="value">${fmtMoney(totalIncome)}</div>
     </div>
     <div class="stat-card">
-      <div class="label">Monthly Expenses</div>
+      <div class="label">Monthly Expenses (excl. card spend)</div>
       <div class="value">${fmtMoney(totalExpenses)}</div>
     </div>
     <div class="stat-card ${netFree >= 0 ? 'positive' : 'negative'}">
@@ -1170,6 +1226,35 @@ function renderDashboard() {
         </p>`;
       })()}
     `;
+  }
+
+  const cardStatuses = computeCardDebtFreeStatus(debtExtra);
+  const cardDebtFreeEl = document.getElementById('cardDebtFreeTable');
+  if (cardStatuses.length === 0) {
+    cardDebtFreeEl.innerHTML = `<div class="empty-state">No cards have linked biweekly expenses yet — set a Card on those entries to track this.</div>`;
+  } else {
+    cardDebtFreeEl.innerHTML = `
+      <table class="ledger">
+        <thead><tr>
+          <th>Card</th><th class="num">Balance</th><th class="num">Spend Added / Mo.</th>
+          <th class="num">Paid / Mo.</th><th>Net</th>
+        </tr></thead>
+        <tbody>
+          ${cardStatuses.map(c => `
+            <tr>
+              <td>${c.account.name}${c.account.inProgram ? ' <span class="stamp brass">In Program</span>' : ''}</td>
+              <td class="num">${fmtMoney(c.account.balance)}</td>
+              <td class="num">${fmtMoney(c.monthlySpend)}</td>
+              <td class="num">${fmtMoney(c.payment)}</td>
+              <td>${c.netChange > 0
+                  ? `<span class="stamp">Growing +${fmtMoney(c.netChange)}/mo</span>`
+                  : `<span class="stamp green">Shrinking ${fmtMoney(c.netChange)}/mo</span>`}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+      <p style="font-size:12.5px;color:var(--ink-soft);margin:10px 0 0;">
+        "Growing" means the card's minimum + extra payment isn't covering what's actively being charged to it — the balance will climb even while you're paying it. ${cardStatuses.some(c => !c.inPlan) ? 'Cards marked "In Program" aren\'t eligible for extra payments in the plan above.' : ''}
+      </p>`;
   }
 
   const projectPlan = computeProjectSavingsPlan(projectExtra);
