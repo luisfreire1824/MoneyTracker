@@ -824,11 +824,11 @@ onAuthStateChanged(auth, (user) => {
 function startListeners() {
   unsubs.push(onSnapshot(collection(db, 'accounts'), snap => {
     accounts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderAccounts(); renderDashboard(); renderBalanceChart(); populateAccountSelects(); renderCalendar(); renderSignOffReview();
+    renderAccounts(); renderDashboard(); renderBalanceChart(); populateAccountSelects(); renderCalendar(); renderSignOffReview(); renderBalanceHistory(); renderExpenses();
   }));
   unsubs.push(onSnapshot(collection(db, 'balanceHistory'), snap => {
     balanceHistory = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderBalanceHistory(); renderBalanceChart(); renderCalendar(); renderSignOffBanner();
+    renderBalanceHistory(); renderBalanceChart(); renderCalendar(); renderSignOffBanner(); renderDashboard();
   }));
   unsubs.push(onSnapshot(collection(db, 'income'), snap => {
     income = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -1252,6 +1252,18 @@ function renderSignOffReview() {
     document.getElementById('signOffPoolLabel').textContent = '';
     return;
   }
+  // Any Firestore change to accounts (another device signing off, a fix-up
+  // tool running, etc.) re-fires this render and would otherwise wipe out
+  // whatever's mid-typed here. Capture the current inputs first and reuse
+  // them instead of resetting to the account's saved values.
+  const staged = {};
+  eligible.forEach(a => {
+    const balEl = document.getElementById('signoff_bal_' + a.id);
+    const minEl = document.getElementById('signoff_min_' + a.id);
+    const extraEl = document.getElementById('signoff_extra_' + a.id);
+    if (balEl) staged[a.id] = { bal: balEl.value, min: minEl ? minEl.value : '', extra: extraEl ? extraEl.value : '' };
+  });
+
   tableEl.innerHTML = `
     <table class="ledger">
       <thead><tr>
@@ -1259,24 +1271,34 @@ function renderSignOffReview() {
         <th class="num">Suggested Extra</th><th class="num">Extra to Pay</th>
       </tr></thead>
       <tbody>
-        ${eligible.map(a => `
+        ${eligible.map(a => {
+          const s = staged[a.id];
+          const balVal = s ? s.bal : (a.balance ?? '');
+          const minVal = s ? s.min : (a.minPayment ?? '');
+          const extraVal = s ? s.extra : '0';
+          return `
           <tr>
             <td>${a.name}</td>
-            <td><input type="number" id="signoff_bal_${a.id}" value="${a.balance ?? ''}" style="width:100px;text-align:right;" oninput="recomputeSignOffSuggestions()"></td>
-            <td><input type="number" id="signoff_min_${a.id}" value="${a.minPayment ?? ''}" style="width:90px;text-align:right;"></td>
+            <td><input type="number" id="signoff_bal_${a.id}" value="${balVal}" style="width:100px;text-align:right;" oninput="recomputeSignOffSuggestions()"></td>
+            <td><input type="number" id="signoff_min_${a.id}" value="${minVal}" style="width:90px;text-align:right;"></td>
             <td class="num" id="signoff_suggest_${a.id}">—</td>
-            <td><input type="number" id="signoff_extra_${a.id}" value="0" style="width:90px;text-align:right;"></td>
-          </tr>`).join('')}
+            <td><input type="number" id="signoff_extra_${a.id}" value="${extraVal}" style="width:90px;text-align:right;"></td>
+          </tr>`;
+        }).join('')}
       </tbody>
     </table>`;
-  recomputeSignOffSuggestions(true);
+  // Only auto-fill "Extra to Pay" with the suggestion for cards that had no
+  // staged value yet — never overwrite something already typed.
+  const idsToSeed = new Set(eligible.filter(a => !staged[a.id]).map(a => a.id));
+  recomputeSignOffSuggestions(idsToSeed);
 }
 
 // Recomputes the "Suggested Extra" column live from whatever's currently
 // typed into the New Balance fields — without touching whatever the person
 // has already typed into "Extra to Pay" (that field is theirs to override).
 // initializeExtra=true only on first build, to seed a starting value.
-window.recomputeSignOffSuggestions = function (initializeExtra) {
+window.recomputeSignOffSuggestions = function (idsToSeed) {
+  const seedSet = idsToSeed instanceof Set ? idsToSeed : new Set();
   const eligible = accounts.filter(a => !a.inProgram);
   const overrides = {};
   eligible.forEach(a => {
@@ -1290,7 +1312,7 @@ window.recomputeSignOffSuggestions = function (initializeExtra) {
     const suggested = entry ? entry.extraAllocation : 0;
     const suggestEl = document.getElementById('signoff_suggest_' + a.id);
     if (suggestEl) suggestEl.textContent = fmtMoney(suggested);
-    if (initializeExtra) {
+    if (seedSet.has(a.id)) {
       const extraEl = document.getElementById('signoff_extra_' + a.id);
       if (extraEl) extraEl.value = suggested.toFixed(2);
     }
@@ -1545,12 +1567,29 @@ async function updateCashFlowSnapshot(totalDebt, totalIncome, totalExpenses, net
 
 /* ---------------- BALANCE CHART ---------------- */
 let cashFlowChartInstance = null;
+// Shared helper: shows a text explanation in place of a chart's canvas
+// instead of just leaving it blank, which reads as broken rather than
+// "not enough data yet."
+function setChartEmptyState(ctx, message) {
+  ctx.parentElement.querySelector('.empty-state')?.remove();
+  if (message) {
+    ctx.insertAdjacentHTML('beforebegin', `<div class="empty-state">${message}</div>`);
+    ctx.style.display = 'none';
+  } else {
+    ctx.style.display = 'block';
+  }
+}
+
 function renderCashFlowChart() {
   const ctx = document.getElementById('cashFlowChart');
   if (!ctx) return;
   const sorted = cashFlowHistory.slice().sort((a, b) => a.date.localeCompare(b.date));
   if (cashFlowChartInstance) cashFlowChartInstance.destroy();
-  if (sorted.length < 2) { return; } // need at least 2 points for a trend to mean anything
+  if (sorted.length < 2) {
+    setChartEmptyState(ctx, 'Needs 2+ months of data to plot a trend — this fills in automatically as you keep using the app.');
+    return;
+  }
+  setChartEmptyState(ctx, null);
   cashFlowChartInstance = new Chart(ctx, {
     type: 'line',
     data: {
@@ -1580,7 +1619,11 @@ function renderTotalDebtChart() {
   if (!ctx) return;
   const sorted = cashFlowHistory.slice().sort((a, b) => a.date.localeCompare(b.date));
   if (totalDebtChartInstance) totalDebtChartInstance.destroy();
-  if (sorted.length < 2) return; // need at least 2 points for a trend to mean anything
+  if (sorted.length < 2) {
+    setChartEmptyState(ctx, 'Needs 2+ months of data to plot a trend — this fills in automatically as you keep using the app.');
+    return;
+  }
+  setChartEmptyState(ctx, null);
   totalDebtChartInstance = new Chart(ctx, {
     type: 'line',
     data: {
@@ -1615,7 +1658,11 @@ function renderCategoryChart() {
   });
   const labels = Object.keys(totals).sort((a, b) => totals[b] - totals[a]);
   if (categoryChartInstance) categoryChartInstance.destroy();
-  if (labels.length === 0) return;
+  if (labels.length === 0) {
+    setChartEmptyState(ctx, 'No expenses yet.');
+    return;
+  }
+  setChartEmptyState(ctx, null);
   const palette = ['#A8763E', '#34513A', '#8C3B2E', '#5B6472', '#1C2430', '#B98F5E', '#6B8E7F', '#C4A15A'];
   categoryChartInstance = new Chart(ctx, {
     type: 'bar',
@@ -1643,35 +1690,45 @@ function renderBalanceChart() {
   const ctx = document.getElementById('balanceChart');
   if (!ctx) return;
   const byAccount = {};
-  balanceHistory
-    .slice()
-    .sort((a, b) => new Date(a.date) - new Date(b.date))
-    .forEach(h => {
-      const acct = accounts.find(a => a.id === h.accountId);
-      const name = acct ? acct.name : 'Unknown';
-      if (!byAccount[name]) byAccount[name] = [];
-      byAccount[name].push({ x: h.date, y: Number(h.balance) || 0 });
-    });
+  balanceHistory.forEach(h => {
+    const acct = accounts.find(a => a.id === h.accountId);
+    const name = acct ? acct.name : 'Unknown';
+    if (!byAccount[name]) byAccount[name] = {};
+    byAccount[name][h.date] = Number(h.balance) || 0;
+  });
+
+  // Chart.js's time-scale x-axis needs a separate date-adapter library that
+  // isn't loaded here — using it silently produces a blank chart even with
+  // real data. A shared category axis built from actual dates needs no
+  // extra dependency and is just as accurate for how this data comes in
+  // (accounts mostly get updated together via the biweekly sign-off).
+  const labels = [...new Set(balanceHistory.map(h => h.date))].sort();
+
+  if (balanceChartInstance) balanceChartInstance.destroy();
+  if (labels.length === 0) {
+    setChartEmptyState(ctx, 'No balance history yet — add an entry or run a biweekly review.');
+    return;
+  }
+  setChartEmptyState(ctx, null);
 
   const palette = ['#A8763E', '#34513A', '#8C3B2E', '#5B6472', '#1C2430', '#B98F5E'];
   const datasets = Object.keys(byAccount).map((name, i) => ({
     label: name,
-    data: byAccount[name],
+    data: labels.map(d => byAccount[name][d] ?? null),
+    spanGaps: true,
     borderColor: palette[i % palette.length],
     backgroundColor: palette[i % palette.length],
     tension: 0.15,
     fill: false,
   }));
 
-  if (balanceChartInstance) balanceChartInstance.destroy();
-  if (datasets.length === 0) return;
   balanceChartInstance = new Chart(ctx, {
     type: 'line',
-    data: { datasets },
+    data: { labels: labels.map(d => fmtDate(d)), datasets },
     options: {
       responsive: true,
       scales: {
-        x: { type: 'time', time: { unit: 'month' }, grid: { color: '#D6D0C0' } },
+        x: { grid: { color: '#D6D0C0' } },
         y: { grid: { color: '#D6D0C0' }, ticks: { callback: v => '$' + v.toLocaleString() } }
       },
       plugins: { legend: { position: 'bottom', labels: { font: { family: 'Inter' } } } }
@@ -2216,6 +2273,7 @@ function expenseTableHTML(rows, frequency, tableKey, renderFn) {
   return `
     <table class="ledger"><thead><tr>
       <th onclick="toggleSort('${tableKey}','item',${renderFn})">Item</th>
+      <th onclick="toggleSort('${tableKey}','category',${renderFn})">Category</th>
       <th class="num" onclick="toggleSort('${tableKey}','amount',${renderFn})">${showDueDays ? 'Amount (ea.)' : 'Amount'}</th>
       ${showDueDays ? '<th>Due Days</th>' : ''}
       ${showCard ? '<th>Card</th>' : ''}
@@ -2225,6 +2283,7 @@ function expenseTableHTML(rows, frequency, tableKey, renderFn) {
         const acct = e.accountId ? accounts.find(a => a.id === e.accountId) : null;
         return `<tr>
           <td>${e.item || '—'}</td>
+          <td>${e.category || '—'}</td>
           <td class="num">${fmtMoney(e.amount)}</td>
           ${showDueDays ? `<td>${e.dueDay || '—'} &amp; ${e.dueDay2 || '—'}</td>` : ''}
           ${showCard ? `<td>${acct ? acct.name : '—'}</td>` : ''}
@@ -2236,6 +2295,7 @@ function expenseTableHTML(rows, frequency, tableKey, renderFn) {
       }).join('')}
       <tr>
         <td style="font-weight:600;">Monthly Total</td>
+        <td></td>
         <td class="num" style="font-weight:600;">${fmtMoney(monthlyTotal)}</td>
         ${showDueDays ? '<td></td>' : ''}${showCard ? '<td></td>' : ''}<td></td>
       </tr>
