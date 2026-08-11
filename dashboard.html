@@ -601,6 +601,12 @@
       </div>
 
       <div class="panel">
+        <h2>Fix APR / Usage% Decimals</h2>
+        <p class="panel-sub">One-time cleanup for accounts imported before the percent-decimal fix existed. Safe to run anytime — already-correct accounts are left alone.</p>
+        <button class="btn-ghost btn" onclick="fixPercentDecimals()">Fix Percent Decimals</button>
+      </div>
+
+      <div class="panel">
         <h2>Import from Excel/CSV</h2>
         <p class="panel-sub">Upload a sheet, map its columns to the right fields, review, then confirm.</p>
         <div class="field">
@@ -1515,7 +1521,10 @@ async function saveModal() {
   schema.forEach(f => {
     const el = document.getElementById('f_' + f.key);
     if (f.type === 'checkbox') data[f.key] = el.checked;
-    else if (f.type === 'number') data[f.key] = el.value === '' ? null : Number(el.value);
+    else if (f.type === 'number') {
+      const n = Number(el.value);
+      data[f.key] = (el.value === '' || Number.isNaN(n)) ? null : n;
+    }
     else data[f.key] = el.value;
   });
   if (existing && existing.id) {
@@ -1975,12 +1984,42 @@ window.exportAllData = function () {
     Expenses: expenses, Projects: projects, CashFlowHistory: cashFlowHistory,
   };
   Object.entries(sheets).forEach(([name, rows]) => {
-    const clean = rows.map(({ id, ...rest }) => rest); // drop Firestore doc ids, not meaningful outside the app
+    const clean = rows.map(({ id, ...rest }) => {
+      // Safety net: NaN isn't a valid OOXML numeric literal and corrupts
+      // the whole workbook if written. Any NaN slipping through (old data
+      // written before the import/entry guards existed) becomes blank here
+      // instead of breaking the export.
+      const sanitized = {};
+      Object.entries(rest).forEach(([k, v]) => { sanitized[k] = (typeof v === 'number' && Number.isNaN(v)) ? '' : v; });
+      return sanitized;
+    });
     const ws = XLSX.utils.json_to_sheet(clean.length ? clean : [{}]);
     XLSX.utils.book_append_sheet(wb, ws, name);
   });
   const dateStr = new Date().toISOString().slice(0, 10);
   XLSX.writeFile(wb, `household-ledger-backup-${dateStr}.xlsx`);
+};
+
+// One-time cleanup: Excel percent-formatted cells import as their decimal
+// value (0.2749 for "27.49%"). Accounts created before the import fix
+// existed are stuck at the raw decimal. This scans every account and
+// corrects any normalAPR/usagePct still under 1 back to a whole percent —
+// safe to run repeatedly, since already-correct values (>= 1) are untouched.
+window.fixPercentDecimals = async function () {
+  const affected = accounts.filter(a =>
+    (typeof a.normalAPR === 'number' && a.normalAPR > 0 && a.normalAPR < 1) ||
+    (typeof a.usagePct === 'number' && a.usagePct > 0 && a.usagePct < 1));
+  if (affected.length === 0) { alert('Nothing to fix — no accounts have a fractional APR/Usage% value.'); return; }
+  if (!confirm(`${affected.length} account(s) will have their APR and/or Usage% multiplied by 100 (e.g. 0.2749 → 27.49). Continue?`)) return;
+  const batch = writeBatch(db);
+  affected.forEach(a => {
+    const updates = {};
+    if (typeof a.normalAPR === 'number' && a.normalAPR > 0 && a.normalAPR < 1) updates.normalAPR = Math.round(a.normalAPR * 10000) / 100;
+    if (typeof a.usagePct === 'number' && a.usagePct > 0 && a.usagePct < 1) updates.usagePct = Math.round(a.usagePct * 10000) / 100;
+    batch.update(doc(db, 'accounts', a.id), updates);
+  });
+  await batch.commit();
+  alert(`Fixed ${affected.length} account(s).`);
 };
 
 const IMPORT_TARGETS = {
@@ -2124,7 +2163,13 @@ function mapRows(target, rawRows) {
       const sourceCol = importFieldMap[f.key];
       let val = sourceCol ? raw[sourceCol] : '';
       if (f.type === 'number') {
-        val = val === '' ? null : Number(val);
+        // Guard against blank AND undefined cells (a sparse row from Excel
+        // can leave `raw[sourceCol]` undefined rather than ''), plus any
+        // other input Number() can't parse — all of these must become null,
+        // never NaN. NaN silently written to Firestore corrupts any later
+        // .xlsx export, since NaN isn't a valid OOXML numeric literal.
+        const n = Number(val);
+        val = (val === '' || val === undefined || val === null || Number.isNaN(n)) ? null : n;
         // Excel stores % formatted cells as their decimal value (0.2099 for
         // "20.99%"). A card APR/usage under 1 is never realistic, so treat
         // that as the tell and convert it back to a whole percent.
