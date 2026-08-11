@@ -501,6 +501,7 @@
           <h2 style="margin:0;">Total Debt Trend</h2>
           <button class="btn-ghost btn" id="totalDebtRangeToggle" onclick="toggleTotalDebtRange()">Show Full History</button>
         </div>
+        <div id="totalDebtStats" class="table-wrap"></div>
         <p class="panel-sub">Household-wide total, logged automatically each month, with a 3-month rolling average.</p>
         <canvas id="totalDebtChart" height="90"></canvas>
       </div>
@@ -554,12 +555,10 @@
 
       <div class="panel">
         <div class="toolbar">
-          <h2 style="margin:0;">Card Balance Trend</h2>
-          <div class="filters">
-            <select id="trendCardSelect" class="account-select" onchange="renderCardTrendChart()"></select>
-            <button class="btn-ghost btn" id="cardTrendRangeToggle" onclick="toggleCardTrendRange()">Show Full History</button>
-          </div>
+          <h2 style="margin:0;" id="cardTrendHeading">Card Balance Trend</h2>
+          <button class="btn-ghost btn" id="cardTrendRangeToggle" onclick="toggleCardTrendRange()">Show Full History</button>
         </div>
+        <p class="panel-sub">Click a card in the table above to see its trend here.</p>
         <div id="cardTrendStats" class="table-wrap"></div>
         <p class="panel-sub">Balance (line, left axis) vs. amount paid per month (bars, right axis), with a 3-month rolling average.</p>
         <canvas id="cardTrendChart" height="110"></canvas>
@@ -1504,6 +1503,7 @@ function computeProjectSavingsPlan(extraAmount) {
 function renderDashboard() {
   renderSignOffBanner();
   renderMilestoneBanner();
+  renderDashboardDebtStats();
   const totalDebt = accounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
   const totalMinPayments = accounts.reduce((s, a) => s + (Number(a.minPayment) || 0), 0);
   const totalIncome = income.reduce((s, i) => s + monthlyEquivalent(Number(i.amount) || 0, i.frequency), 0);
@@ -1764,6 +1764,7 @@ let totalDebtChartInstance = null;
 function renderTotalDebtChart() {
   const ctx = document.getElementById('totalDebtChart');
   if (!ctx) return;
+  renderDashboardDebtStats();
   let sorted = cashFlowHistory.slice().sort((a, b) => a.date.localeCompare(b.date));
   if (!totalDebtShowFull) sorted = sorted.slice(-6);
   if (totalDebtChartInstance) totalDebtChartInstance.destroy();
@@ -1807,6 +1808,36 @@ function renderTotalDebtChart() {
   });
 }
 
+// Household-wide version of the per-card stats table: total balance across
+// every account, overall utilization, max/min total debt ever recorded
+// (from the monthly cashFlowHistory snapshots), and total paid YTD across
+// every card combined.
+function renderDashboardDebtStats() {
+  const el = document.getElementById('totalDebtStats');
+  if (!el) return;
+  const latestBalance = accounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
+  const cardAccounts = accounts.filter(a => a.type === 'card' && Number(a.creditLimit) > 0);
+  const totalCardBalance = cardAccounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
+  const totalCardLimit = cardAccounts.reduce((s, a) => s + (Number(a.creditLimit) || 0), 0);
+  const utilization = totalCardLimit > 0 ? (totalCardBalance / totalCardLimit) * 100 : null;
+  const debtSeries = cashFlowHistory.map(s => s.totalDebt).filter(v => typeof v === 'number');
+  const maxBalance = debtSeries.length ? Math.max(...debtSeries) : null;
+  const minBalance = debtSeries.length ? Math.min(...debtSeries) : null;
+  const currentYear = new Date().getFullYear();
+  const paidYTD = balanceHistory
+    .filter(h => new Date(h.date + 'T00:00:00').getFullYear() === currentYear)
+    .reduce((s, h) => s + (Number(h.paymentAmount) || 0), 0);
+
+  el.innerHTML = `
+    <table class="ledger"><tbody>
+      <tr><td>Latest Balance (Total)</td><td class="num">${fmtMoney(latestBalance)}</td>
+          <td>Utilization</td><td class="num">${utilization !== null ? utilization.toFixed(0) + '%' : '—'}</td></tr>
+      <tr><td>Max Balance</td><td class="num">${maxBalance !== null ? fmtMoney(maxBalance) : '—'}</td>
+          <td>Min Balance</td><td class="num">${minBalance !== null ? fmtMoney(minBalance) : '—'}</td></tr>
+      <tr><td>Paid YTD (${currentYear})</td><td class="num" colspan="3">${fmtMoney(paidYTD)}</td></tr>
+    </tbody></table>`;
+}
+
 let categoryChartInstance = null;
 function renderCategoryChart() {
   const ctx = document.getElementById('categoryChart');
@@ -1846,6 +1877,14 @@ function renderCategoryChart() {
 }
 
 let cardTrendShowFull = false;
+let selectedTrendAccountId = null;
+
+window.selectTrendAccount = function (id) {
+  selectedTrendAccountId = id;
+  renderAccounts(); // re-render to move the highlight
+  renderCardTrendChart();
+  document.getElementById('cardTrendHeading').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+};
 window.toggleCardTrendRange = function () {
   cardTrendShowFull = !cardTrendShowFull;
   document.getElementById('cardTrendRangeToggle').textContent = cardTrendShowFull ? 'Show Last 6 Months' : 'Show Full History';
@@ -1874,20 +1913,20 @@ function getMonthlyCardSeries(accountId) {
 let cardTrendChartInstance = null;
 window.renderCardTrendChart = function () {
   const ctx = document.getElementById('cardTrendChart');
-  const sel = document.getElementById('trendCardSelect');
   const statsEl = document.getElementById('cardTrendStats');
-  if (!ctx || !sel) return;
+  const heading = document.getElementById('cardTrendHeading');
+  if (!ctx) return;
 
-  // The dropdown is a .account-select, refreshed elsewhere with a blank
-  // "— None —" leading option; default to the first real account so the
-  // chart has something to show without an extra click.
-  if (!sel.value && accounts.length > 0) sel.value = accounts[0].id;
-  const accountId = sel.value;
+  // Default to the first account so the panel has something to show
+  // before anyone's clicked a row in the table above.
+  if (!selectedTrendAccountId && accounts.length > 0) selectedTrendAccountId = accounts[0].id;
+  const accountId = selectedTrendAccountId;
   const account = accounts.find(a => a.id === accountId);
+  if (heading) heading.textContent = account ? `Card Balance Trend — ${account.name}` : 'Card Balance Trend';
 
   if (cardTrendChartInstance) cardTrendChartInstance.destroy();
   if (!accountId || !account) {
-    setChartEmptyState(ctx, 'Select a card above to see its balance trend.');
+    setChartEmptyState(ctx, 'Click a card in the table above to see its balance trend.');
     if (statsEl) statsEl.innerHTML = '';
     return;
   }
@@ -2267,10 +2306,11 @@ function renderAccounts() {
       ${rows.map(a => {
         const bal = Number(a.balance) || 0;
         const util = (a.type === 'card' && Number(a.creditLimit) > 0) ? (bal / Number(a.creditLimit)) * 100 : null;
+        const isSelected = a.id === selectedTrendAccountId;
         return `
-        <tr>
+        <tr style="cursor:pointer;${isSelected ? 'background:rgba(168,118,62,.18);' : ''}" onclick="selectTrendAccount('${a.id}')">
           <td>${a.owner || '—'}</td>
-          <td>${a.name || '—'}</td>
+          <td>${a.name || '—'}${isSelected ? ' <span class="stamp brass">Trending</span>' : ''}</td>
           <td>${a.type || '—'}</td>
           <td>${a.inProgram ? '<span class="stamp green">In Program</span>' : '—'}</td>
           <td class="num">${fmtMoney(a.balance)}${bal <= 0 ? ' <span class="stamp green">Debt-Free</span>' : ''}</td>
@@ -2279,8 +2319,8 @@ function renderAccounts() {
           <td class="num">${a.creditLimit ? fmtMoney(a.creditLimit) : '—'}</td>
           <td class="num">${util !== null ? util.toFixed(0) + '%' + (util > 70 ? ' <span class="stamp">High</span>' : '') : '—'}</td>
           <td class="row-actions">
-            <button onclick="editAccount('${a.id}')">Edit</button>
-            <button onclick="deleteAccount('${a.id}')">Delete</button>
+            <button onclick="event.stopPropagation(); editAccount('${a.id}')">Edit</button>
+            <button onclick="event.stopPropagation(); deleteAccount('${a.id}')">Delete</button>
           </td>
         </tr>`;
       }).join('')}
