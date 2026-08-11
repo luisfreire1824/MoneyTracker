@@ -398,7 +398,6 @@
     <button data-tab="debt">Debt &amp; Cards</button>
     <button data-tab="money">Income &amp; Expenses</button>
     <button data-tab="projects">Projects</button>
-    <button data-tab="calendar">Calendar</button>
     <button data-tab="import">Import Data</button>
   </nav>
 
@@ -410,6 +409,12 @@
 
       <div class="card-row" id="dashboardCards"></div>
 
+      <div class="panel">
+        <h2>Next 30 Days</h2>
+        <p class="panel-sub">Bills, card due dates, and income hitting soon — use this to gauge what's coming out of the account before setting pay amounts below.</p>
+        <div id="next7Table" class="table-wrap"></div>
+      </div>
+
       <div class="panel" id="signOffReviewPanel">
         <h2>Biweekly Card Review</h2>
         <p class="panel-sub">Enter each card's current balance and minimum due. The suggested extra updates live as you type, based on the paydown priority below — override any of it before signing off.</p>
@@ -418,10 +423,32 @@
             <label style="text-transform:none;letter-spacing:0;font-size:12px;">Review date:
               <input type="date" id="signOffDate" style="margin-left:6px;">
             </label>
+            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Whose cards:
+              <select id="signOffOwnerFilter" onchange="renderSignOffReview()" style="margin-left:6px;">
+                <option value="">Both</option>
+              </select>
+            </label>
           </div>
           <span id="signOffPoolLabel" style="font-size:12.5px;color:var(--ink-soft);"></span>
         </div>
+        <div class="toolbar">
+          <div class="filters">
+            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Review schedule, days of month:
+              <input type="number" id="reviewDay1Input" min="1" max="31" style="width:55px;margin-left:6px;">
+              <input type="number" id="reviewDay2Input" min="1" max="31" style="width:55px;">
+            </label>
+            <button class="btn-ghost btn" onclick="saveReviewSchedule()">Save Schedule</button>
+          </div>
+        </div>
         <div id="signOffTable" class="table-wrap"></div>
+        <div class="toolbar" style="margin-top:14px;">
+          <div class="filters">
+            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Joint account balance right now:
+              <input type="number" id="reviewJointBalance" style="width:110px;margin-left:6px;" oninput="recomputeReviewSummary()">
+            </label>
+          </div>
+        </div>
+        <div id="reviewSummary" class="table-wrap" style="margin-top:10px;"></div>
         <div style="margin-top:14px;">
           <button class="btn" onclick="confirmSignOff()">Sign Off &amp; Save</button>
         </div>
@@ -458,12 +485,6 @@
       </div>
 
       <div class="panel">
-        <h2>Next 7 Days</h2>
-        <p class="panel-sub">Bills, card due dates, and income hitting soon. Full timeline on the Calendar tab.</p>
-        <div id="next7Table" class="table-wrap"></div>
-      </div>
-
-      <div class="panel">
         <h2>Spending by Category</h2>
         <p class="panel-sub">Monthly-equivalent totals across all recurring expenses. Tag a Category on each expense to populate this.</p>
         <canvas id="categoryChart" height="90"></canvas>
@@ -476,15 +497,12 @@
       </div>
 
       <div class="panel">
-        <h2>Total Debt Trend</h2>
-        <p class="panel-sub">Household-wide total, logged automatically each month.</p>
+        <div class="toolbar">
+          <h2 style="margin:0;">Total Debt Trend</h2>
+          <button class="btn-ghost btn" id="totalDebtRangeToggle" onclick="toggleTotalDebtRange()">Show Full History</button>
+        </div>
+        <p class="panel-sub">Household-wide total, logged automatically each month, with a 3-month rolling average.</p>
         <canvas id="totalDebtChart" height="90"></canvas>
-      </div>
-
-      <div class="panel">
-        <h2>Balance History</h2>
-        <p class="panel-sub">Trend across all cards and loans.</p>
-        <canvas id="balanceChart" height="90"></canvas>
       </div>
     </section>
 
@@ -529,8 +547,22 @@
             <button class="btn" onclick="openBalanceHistoryModal()">+ Add Entry</button>
           </div>
         </div>
-        <p class="panel-sub">Per-payment balance tracking, one row per statement/payment.</p>
-        <div id="balanceHistoryTable" class="table-wrap"></div>
+        <p class="panel-sub">Raw per-payment log — the Card Balance Trend panel below has the at-a-glance view most days.</p>
+        <button class="btn-ghost btn" id="balanceLogToggle" onclick="toggleBalanceLogVisible()" style="margin-bottom:12px;">Show Full Log</button>
+        <div id="balanceHistoryTable" class="table-wrap" style="display:none;"></div>
+      </div>
+
+      <div class="panel">
+        <div class="toolbar">
+          <h2 style="margin:0;">Card Balance Trend</h2>
+          <div class="filters">
+            <select id="trendCardSelect" class="account-select" onchange="renderCardTrendChart()"></select>
+            <button class="btn-ghost btn" id="cardTrendRangeToggle" onclick="toggleCardTrendRange()">Show Full History</button>
+          </div>
+        </div>
+        <div id="cardTrendStats" class="table-wrap"></div>
+        <p class="panel-sub">Balance (line, left axis) vs. amount paid per month (bars, right axis), with a 3-month rolling average.</p>
+        <canvas id="cardTrendChart" height="110"></canvas>
       </div>
     </section>
 
@@ -593,6 +625,18 @@
         <p class="panel-sub">New entries default to this card — only change it per-entry when needed.</p>
         <div id="biweeklyExpenseTable" class="table-wrap"></div>
       </div>
+
+      <div class="panel">
+        <div class="toolbar">
+          <h2 style="margin:0;">One-Time Expenses</h2>
+          <div class="filters">
+            <button class="btn-ghost btn" onclick="clearOneTimeExpenses()">Clear All</button>
+            <button class="btn" onclick="openOneTimeExpenseModal()">+ Add Expense</button>
+          </div>
+        </div>
+        <p class="panel-sub">Ad-hoc, non-recurring costs — vet visits, one-off events, travel. Not part of any monthly total, so they don't skew the regular budget.</p>
+        <div id="oneTimeExpenseTable" class="table-wrap"></div>
+      </div>
     </section>
 
     <!-- ---------- PROJECTS ---------- -->
@@ -619,29 +663,6 @@
           </div>
         </div>
         <div id="projectsTable" class="table-wrap"></div>
-      </div>
-    </section>
-
-    <!-- ---------- CALENDAR ---------- -->
-    <section id="tab-calendar" class="tab-content">
-      <div class="panel">
-        <div class="toolbar">
-          <h2 style="margin:0;">Upcoming</h2>
-          <div class="filters">
-            <select id="calendarRange" onchange="renderCalendar()">
-              <option value="14">Next 14 days</option>
-              <option value="30" selected>Next 30 days</option>
-              <option value="60">Next 60 days</option>
-              <option value="90">Next 90 days</option>
-            </select>
-            <label style="text-transform:none;letter-spacing:0;font-size:12px;display:flex;align-items:center;gap:5px;">
-              <input type="checkbox" id="calendarShowZeroBalance" onchange="renderCalendar()">
-              Show $0-balance cards
-            </label>
-          </div>
-        </div>
-        <p class="panel-sub">Recurring expenses, card minimum-payment due dates, and income &mdash; all in one timeline. Set a Due Day on monthly expenses and a Next Pay Date on income to populate this.</p>
-        <div id="calendarTable" class="table-wrap"></div>
       </div>
     </section>
 
@@ -762,7 +783,8 @@ let expenses = [];       // { item, amount, frequency: 'monthly'|'biweekly' }
 let projects = [];
 let cashFlowHistory = [];
 let savings = [];
-let settings = { monthlyExtra: 0, splitRatio: 70, defaultCardId: '' };
+let oneTimeExpenses = [];
+let settings = { monthlyExtra: 0, splitRatio: 70, defaultCardId: '', reviewDay1: null, reviewDay2: null };
 
 let unsubs = [];
 let sortState = {}; // per-table current sort {key, dir}
@@ -775,11 +797,13 @@ let sortState = {}; // per-table current sort {key, dir}
 // silently failing with "not defined" before this exposure.
 window.renderAccounts = () => renderAccounts();
 window.renderProjects = () => renderProjects();
-window.renderCalendar = () => renderCalendar();
+
 window.renderBalanceHistory = () => renderBalanceHistory();
 window.renderIncome = () => renderIncome();
 window.renderExpenses = () => renderExpenses();
 window.renderSavings = () => renderSavings();
+window.renderSignOffReview = () => renderSignOffReview();
+window.renderOneTimeExpenses = () => renderOneTimeExpenses();
 
 /* ---------------- AUTH ---------------- */
 window.handleLogin = async function () {
@@ -824,19 +848,19 @@ onAuthStateChanged(auth, (user) => {
 function startListeners() {
   unsubs.push(onSnapshot(collection(db, 'accounts'), snap => {
     accounts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderAccounts(); renderDashboard(); renderBalanceChart(); populateAccountSelects(); renderCalendar(); renderSignOffReview(); renderBalanceHistory(); renderExpenses();
+    renderAccounts(); renderDashboard(); populateAccountSelects(); renderCardTrendChart(); renderNext7Days(); renderSignOffReview(); renderBalanceHistory(); renderExpenses();
   }));
   unsubs.push(onSnapshot(collection(db, 'balanceHistory'), snap => {
     balanceHistory = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderBalanceHistory(); renderBalanceChart(); renderCalendar(); renderSignOffBanner(); renderDashboard();
+    renderBalanceHistory(); renderCardTrendChart(); renderNext7Days(); renderSignOffBanner(); renderDashboard();
   }));
   unsubs.push(onSnapshot(collection(db, 'income'), snap => {
     income = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderIncome(); renderDashboard(); renderCalendar();
+    renderIncome(); renderDashboard(); renderNext7Days();
   }));
   unsubs.push(onSnapshot(collection(db, 'expenses'), snap => {
     expenses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderExpenses(); renderDashboard(); renderCalendar(); renderCategoryChart();
+    renderExpenses(); renderDashboard(); renderNext7Days(); renderCategoryChart();
   }));
   unsubs.push(onSnapshot(collection(db, 'projects'), snap => {
     projects = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -850,17 +874,33 @@ function startListeners() {
     savings = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderSavings(); renderDashboard();
   }));
+  unsubs.push(onSnapshot(collection(db, 'oneTimeExpenses'), snap => {
+    oneTimeExpenses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderOneTimeExpenses();
+  }));
   getDoc(doc(db, 'settings', 'main')).then(snap => {
     if (snap.exists()) {
       settings = snap.data();
       document.getElementById('monthlyExtraInput').value = settings.monthlyExtra || 0;
       document.getElementById('splitRatioInput').value = settings.splitRatio ?? 70;
       document.getElementById('splitRatioLabel').textContent = (settings.splitRatio ?? 70) + '%';
+      document.getElementById('reviewDay1Input').value = settings.reviewDay1 ?? '';
+      document.getElementById('reviewDay2Input').value = settings.reviewDay2 ?? '';
       populateAccountSelects();
       renderDashboard();
     }
   });
 }
+
+window.saveReviewSchedule = async function () {
+  const d1 = document.getElementById('reviewDay1Input').value;
+  const d2 = document.getElementById('reviewDay2Input').value;
+  settings.reviewDay1 = d1 === '' ? null : Number(d1);
+  settings.reviewDay2 = d2 === '' ? null : Number(d2);
+  await setDoc(doc(db, 'settings', 'main'), settings);
+  renderSignOffBanner();
+  alert('Review schedule saved.');
+};
 
 window.saveSettings = async function () {
   settings.monthlyExtra = Number(document.getElementById('monthlyExtraInput').value) || 0;
@@ -900,6 +940,16 @@ function monthlyEquivalent(amount, frequency) {
 /* ---------------- CALENDAR: date-math helpers ---------------- */
 function daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
 
+// Real-world due dates and pay dates that land on a weekend typically get
+// moved to the preceding business day (how ACH/bill processing actually
+// works) — shift Saturday back 1 day, Sunday back 2, landing on Friday.
+function adjustForWeekend(date) {
+  const day = date.getDay(); // 0 = Sunday, 6 = Saturday
+  if (day === 6) return new Date(date.getTime() - 1 * 86400000);
+  if (day === 0) return new Date(date.getTime() - 2 * 86400000);
+  return date;
+}
+
 // Next occurrence(s) of a monthly recurrence (same day-of-month as the
 // anchor, clamped to shorter months) that fall within [rangeStart, rangeEnd].
 function monthlyOccurrencesInRange(anchorDateStr, rangeStart, rangeEnd) {
@@ -909,7 +959,7 @@ function monthlyOccurrencesInRange(anchorDateStr, rangeStart, rangeEnd) {
   let cursor = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1);
   while (cursor <= rangeEnd) {
     const dim = daysInMonth(cursor.getFullYear(), cursor.getMonth());
-    const occ = new Date(cursor.getFullYear(), cursor.getMonth(), Math.min(day, dim));
+    const occ = adjustForWeekend(new Date(cursor.getFullYear(), cursor.getMonth(), Math.min(day, dim)));
     if (occ >= rangeStart && occ <= rangeEnd && occ >= anchor) results.push(occ);
     cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
   }
@@ -937,7 +987,7 @@ function semimonthlyOccurrencesInRange(rangeStart, rangeEnd) {
   while (cursor <= rangeEnd) {
     const dim = daysInMonth(cursor.getFullYear(), cursor.getMonth());
     [15, dim].forEach(day => {
-      const occ = new Date(cursor.getFullYear(), cursor.getMonth(), day);
+      const occ = adjustForWeekend(new Date(cursor.getFullYear(), cursor.getMonth(), day));
       if (occ >= rangeStart && occ <= rangeEnd) results.push(occ);
     });
     cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
@@ -958,14 +1008,14 @@ function generateUpcomingEvents(rangeDays, hideZeroBalance = true) {
   expenses.filter(e => e.frequency === 'monthly' && e.dueDay).forEach(e => {
     const anchor = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(Math.min(e.dueDay, 28)).padStart(2, '0')}`;
     monthlyOccurrencesInRange(anchor, today, rangeEnd).forEach(d =>
-      events.push({ date: d, type: 'expense', label: e.item, amount: e.amount }));
+      events.push({ date: d, type: 'expense', label: e.item, amount: e.amount, personal: !!e.personalAccount }));
   });
 
   expenses.filter(e => e.frequency === 'semimonthly' && (e.dueDay || e.dueDay2)).forEach(e => {
     [e.dueDay, e.dueDay2].filter(Boolean).forEach(day => {
       const anchor = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(Math.min(day, 28)).padStart(2, '0')}`;
       monthlyOccurrencesInRange(anchor, today, rangeEnd).forEach(d =>
-        events.push({ date: d, type: 'expense', label: e.item, amount: e.amount }));
+        events.push({ date: d, type: 'expense', label: e.item, amount: e.amount, personal: !!e.personalAccount }));
     });
   });
 
@@ -1011,9 +1061,12 @@ const EVENT_TYPE_LABEL = { expense: 'Bill', income: 'Income', debt: 'Card Due', 
 function renderNext7Days() {
   const el = document.getElementById('next7Table');
   if (!el) return;
-  const events = generateUpcomingEvents(7);
+  // 30 days, not 7 — wide enough to see what's coming out of the account
+  // before deciding pay amounts in the review below. Zero-amount events
+  // (a Due Day set with no real bill behind it, etc.) are just noise here.
+  const events = generateUpcomingEvents(30).filter(e => e.amount);
   if (events.length === 0) {
-    el.innerHTML = `<div class="empty-state">Nothing scheduled in the next 7 days.</div>`;
+    el.innerHTML = `<div class="empty-state">Nothing scheduled in the next 30 days.</div>`;
     return;
   }
   el.innerHTML = `
@@ -1025,32 +1078,7 @@ function renderNext7Days() {
           <td>${e.date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</td>
           <td><span class="stamp ${EVENT_TYPE_STAMP[e.type] || ''}">${EVENT_TYPE_LABEL[e.type]}</span></td>
           <td>${e.label || '—'}</td>
-          <td class="num">${e.amount ? fmtMoney(e.amount) : '—'}</td>
-        </tr>`).join('')}
-    </tbody></table>`;
-}
-
-function renderCalendar() {
-  const el = document.getElementById('calendarTable');
-  renderNext7Days();
-  if (!el) return;
-  const rangeDays = Number(document.getElementById('calendarRange').value);
-  const showZero = document.getElementById('calendarShowZeroBalance').checked;
-  const events = generateUpcomingEvents(rangeDays, !showZero);
-  if (events.length === 0) {
-    el.innerHTML = `<div class="empty-state">Nothing scheduled yet. Add a Due Day to monthly expenses or a Next Pay Date to income to populate this.</div>`;
-    return;
-  }
-  el.innerHTML = `
-    <table class="ledger"><thead><tr>
-      <th>Date</th><th>Type</th><th>Item</th><th class="num">Amount</th>
-    </tr></thead><tbody>
-      ${events.map(e => `
-        <tr>
-          <td>${e.date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</td>
-          <td>${EVENT_TYPE_STAMP[e.type] ? `<span class="stamp ${EVENT_TYPE_STAMP[e.type]}">${EVENT_TYPE_LABEL[e.type]}</span>` : `<span class="stamp">${EVENT_TYPE_LABEL[e.type]}</span>`}</td>
-          <td>${e.label || '—'}</td>
-          <td class="num">${e.amount ? fmtMoney(e.amount) : '—'}</td>
+          <td class="num">${fmtMoney(e.amount)}</td>
         </tr>`).join('')}
     </tbody></table>`;
 }
@@ -1187,10 +1215,24 @@ function getLastSignOffDate() {
   return signed.length ? signed[signed.length - 1] : null;
 }
 
-function daysSinceLastSignOff() {
-  const last = getLastSignOffDate();
-  if (!last) return Infinity;
-  return Math.floor((new Date() - new Date(last + 'T00:00:00')) / 86400000);
+// Finds the most recent scheduled review date (settings.reviewDay1/2, both
+// 1-31) that's on or before today. Checks this month and last month since
+// a day-of-month can fall either side of "today" depending on the day.
+function getMostRecentScheduledReviewDate() {
+  const day1 = settings.reviewDay1, day2 = settings.reviewDay2;
+  if (!day1 && !day2) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const candidates = [];
+  [0, -1].forEach(monthOffset => {
+    const y = today.getFullYear(), m = today.getMonth() + monthOffset;
+    const dim = daysInMonth(y, m);
+    [day1, day2].filter(Boolean).forEach(day => {
+      const d = adjustForWeekend(new Date(y, m, Math.min(day, dim)));
+      if (d <= today) candidates.push(d);
+    });
+  });
+  if (candidates.length === 0) return null;
+  return candidates.reduce((max, d) => d > max ? d : max);
 }
 
 // Monthly "extra" divided into a per-biweekly-period share, using the same
@@ -1204,11 +1246,12 @@ function getPeriodExtra() {
 function renderSignOffBanner() {
   const el = document.getElementById('signOffBanner');
   if (!el) return;
-  const days = daysSinceLastSignOff();
-  if (days < 14) { el.innerHTML = ''; return; }
-  const msg = days === Infinity
-    ? "You haven't signed off on a biweekly card review yet."
-    : `It's been ${days} days since your last biweekly card review.`;
+  const scheduled = getMostRecentScheduledReviewDate();
+  if (!scheduled) { el.innerHTML = ''; return; } // no schedule set yet — nothing to be overdue against
+  const last = getLastSignOffDate();
+  const lastDate = last ? new Date(last + 'T00:00:00') : null;
+  if (lastDate && lastDate >= scheduled) { el.innerHTML = ''; return; } // already reviewed since the last scheduled date
+  const msg = `Card review due since ${fmtDate(scheduled.toISOString().slice(0, 10))}.`;
   el.innerHTML = `
     <div class="panel" style="border-top-color:var(--rust);background:var(--rust-bg);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
       <span style="font-size:13.5px;color:var(--rust);font-weight:600;">${msg}</span>
@@ -1243,13 +1286,31 @@ function renderMilestoneBanner() {
 function renderSignOffReview() {
   const tableEl = document.getElementById('signOffTable');
   const dateEl = document.getElementById('signOffDate');
-  if (!tableEl || !dateEl) return;
+  const ownerSel = document.getElementById('signOffOwnerFilter');
+  if (!tableEl || !dateEl || !ownerSel) return;
   if (!dateEl.value) dateEl.value = new Date().toISOString().slice(0, 10);
 
-  const eligible = accounts.filter(a => !a.inProgram);
-  if (eligible.length === 0) {
-    tableEl.innerHTML = `<div class="empty-state">No cards to review — everything's tagged "In Program."</div>`;
+  // Keep the owner dropdown in sync, same normalization approach as the
+  // Accounts filter (trim/lowercase-dedupe so casing differences between
+  // manual entry and import don't create phantom duplicate options).
+  const currentOwner = ownerSel.value;
+  const ownerMap = new Map();
+  accounts.forEach(a => {
+    const raw = (a.owner || '').trim();
+    if (raw) ownerMap.set(raw.toLowerCase(), raw);
+  });
+  const owners = [...ownerMap.values()].sort();
+  ownerSel.innerHTML = `<option value="">Both</option>` + owners.map(o => `<option value="${o}">${o}</option>`).join('');
+  if (owners.includes(currentOwner)) ownerSel.value = currentOwner;
+  const ownerFilter = ownerSel.value.trim().toLowerCase();
+
+  const allEligible = accounts.filter(a => !a.inProgram);
+  const displayed = ownerFilter ? allEligible.filter(a => (a.owner || '').trim().toLowerCase() === ownerFilter) : allEligible;
+
+  if (displayed.length === 0) {
+    tableEl.innerHTML = `<div class="empty-state">No cards to review${ownerFilter ? ' for this owner' : ' — everything\'s tagged "In Program."'}</div>`;
     document.getElementById('signOffPoolLabel').textContent = '';
+    document.getElementById('reviewSummary').innerHTML = '';
     return;
   }
   // Any Firestore change to accounts (another device signing off, a fix-up
@@ -1257,7 +1318,7 @@ function renderSignOffReview() {
   // whatever's mid-typed here. Capture the current inputs first and reuse
   // them instead of resetting to the account's saved values.
   const staged = {};
-  eligible.forEach(a => {
+  displayed.forEach(a => {
     const balEl = document.getElementById('signoff_bal_' + a.id);
     const minEl = document.getElementById('signoff_min_' + a.id);
     const extraEl = document.getElementById('signoff_extra_' + a.id);
@@ -1271,7 +1332,7 @@ function renderSignOffReview() {
         <th class="num">Suggested Extra</th><th class="num">Extra to Pay</th>
       </tr></thead>
       <tbody>
-        ${eligible.map(a => {
+        ${displayed.map(a => {
           const s = staged[a.id];
           const balVal = s ? s.bal : (a.balance ?? '');
           const minVal = s ? s.min : (a.minPayment ?? '');
@@ -1279,18 +1340,19 @@ function renderSignOffReview() {
           return `
           <tr>
             <td>${a.name}</td>
-            <td><input type="number" id="signoff_bal_${a.id}" value="${balVal}" style="width:100px;text-align:right;" oninput="recomputeSignOffSuggestions()"></td>
-            <td><input type="number" id="signoff_min_${a.id}" value="${minVal}" style="width:90px;text-align:right;"></td>
+            <td><input type="number" id="signoff_bal_${a.id}" value="${balVal}" style="width:100px;text-align:right;" oninput="recomputeSignOffSuggestions(); recomputeReviewSummary();"></td>
+            <td><input type="number" id="signoff_min_${a.id}" value="${minVal}" style="width:90px;text-align:right;" oninput="recomputeReviewSummary()"></td>
             <td class="num" id="signoff_suggest_${a.id}">—</td>
-            <td><input type="number" id="signoff_extra_${a.id}" value="${extraVal}" style="width:90px;text-align:right;"></td>
+            <td><input type="number" id="signoff_extra_${a.id}" value="${extraVal}" style="width:90px;text-align:right;" oninput="recomputeReviewSummary()"></td>
           </tr>`;
         }).join('')}
       </tbody>
     </table>`;
   // Only auto-fill "Extra to Pay" with the suggestion for cards that had no
   // staged value yet — never overwrite something already typed.
-  const idsToSeed = new Set(eligible.filter(a => !staged[a.id]).map(a => a.id));
+  const idsToSeed = new Set(displayed.filter(a => !staged[a.id]).map(a => a.id));
   recomputeSignOffSuggestions(idsToSeed);
+  recomputeReviewSummary();
 }
 
 // Recomputes the "Suggested Extra" column live from whatever's currently
@@ -1321,12 +1383,56 @@ window.recomputeSignOffSuggestions = function (idsToSeed) {
   if (poolLabel) poolLabel.textContent = `Suggested pool this period: ${fmtMoney(periodExtra)}`;
 };
 
+// Sums personal-account-tagged monthly/semimonthly expenses due in the next
+// 14 days — i.e. before the next biweekly review — so there's a concrete
+// "transfer this much" number instead of a vague monthly estimate.
+function computePersonalTransferAmount() {
+  return generateUpcomingEvents(14)
+    .filter(e => e.type === 'expense' && e.personal)
+    .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+}
+
+window.recomputeReviewSummary = function () {
+  const el = document.getElementById('reviewSummary');
+  if (!el) return;
+  const ownerSel = document.getElementById('signOffOwnerFilter');
+  const ownerFilter = ownerSel ? ownerSel.value.trim().toLowerCase() : '';
+  const allEligible = accounts.filter(a => !a.inProgram);
+  const displayed = ownerFilter ? allEligible.filter(a => (a.owner || '').trim().toLowerCase() === ownerFilter) : allEligible;
+
+  let totalPayments = 0;
+  displayed.forEach(a => {
+    const balEl = document.getElementById('signoff_bal_' + a.id);
+    if (!balEl || balEl.value === '') return; // matches confirmSignOff's skip-blank rule
+    const minEl = document.getElementById('signoff_min_' + a.id);
+    const extraEl = document.getElementById('signoff_extra_' + a.id);
+    const minimumDue = minEl && minEl.value !== '' ? Number(minEl.value) : 0;
+    const extraPaid = extraEl && extraEl.value !== '' ? Number(extraEl.value) : 0;
+    totalPayments += minimumDue + extraPaid;
+  });
+
+  const personalTransfer = computePersonalTransferAmount();
+  const jointEl = document.getElementById('reviewJointBalance');
+  const jointBalance = jointEl && jointEl.value !== '' ? Number(jointEl.value) : null;
+  const remaining = jointBalance !== null ? jointBalance - totalPayments - personalTransfer : null;
+
+  el.innerHTML = `
+    <table class="ledger">
+      <tbody>
+        <tr><td>Total Payments This Review</td><td class="num">${fmtMoney(totalPayments)}</td></tr>
+        <tr><td>Transfer to Personal Account <span style="font-weight:400;color:var(--ink-soft);">(next 14 days: phones, subscriptions, etc.)</span></td><td class="num">${fmtMoney(personalTransfer)}</td></tr>
+        <tr><td style="font-weight:600;">Remaining in Joint Account After</td><td class="num" style="font-weight:600;">${jointBalance !== null ? fmtMoney(remaining) : '— enter joint balance above —'}</td></tr>
+      </tbody>
+    </table>`;
+};
+
 window.confirmSignOff = async function () {
   const date = document.getElementById('signOffDate').value;
   if (!date) { alert('Pick a review date.'); return; }
   const eligible = accounts.filter(a => !a.inProgram);
   const batch = writeBatch(db);
   let count = 0;
+  let totalPayments = 0;
   for (const a of eligible) {
     const balEl = document.getElementById('signoff_bal_' + a.id);
     const minEl = document.getElementById('signoff_min_' + a.id);
@@ -1346,7 +1452,18 @@ window.confirmSignOff = async function () {
     // signing off is a commitment that the payment is actually being made —
     // unlike the plain Biweekly Update modal, which just records a balance.
     batch.update(doc(db, 'accounts', a.id), { balance: newBalance, minPayment: minimumDue });
+    totalPayments += paymentAmount;
     count++;
+  }
+  const jointEl = document.getElementById('reviewJointBalance');
+  const jointBalance = jointEl && jointEl.value !== '' ? Number(jointEl.value) : null;
+  const personalTransfer = computePersonalTransferAmount();
+  if (jointBalance !== null) {
+    const sessionRef = doc(collection(db, 'reviewSessions'));
+    batch.set(sessionRef, {
+      date, jointAccountBalance: jointBalance, totalPayments, personalTransfer,
+      remaining: jointBalance - totalPayments - personalTransfer,
+    });
   }
   await batch.commit();
   alert(`Signed off on ${count} card(s) for ${fmtDate(date)}. Locked into history.`);
@@ -1613,28 +1730,71 @@ function renderCashFlowChart() {
   });
 }
 
+// Simple trailing N-point average — used for cashFlowHistory, which has
+// exactly one data point per month, so "3-month rolling average" means
+// the average of the current + previous 2 monthly values.
+function rollingAverageByCount(values, window) {
+  return values.map((_, i) => {
+    const start = Math.max(0, i - window + 1);
+    const slice = values.slice(start, i + 1);
+    return slice.reduce((s, v) => s + v, 0) / slice.length;
+  });
+}
+
+// Time-based trailing average — used for per-card balance history, where
+// entries land on whatever dates they happen to (roughly biweekly, but not
+// exactly), so "3 months" means a 90-day trailing window of actual dates
+// rather than a fixed count of points.
+function rollingAverageByDays(points, windowDays) {
+  return points.map((p, i) => {
+    const cutoff = new Date(p.date.getTime() - windowDays * 86400000);
+    const inWindow = points.slice(0, i + 1).filter(q => q.date >= cutoff);
+    return inWindow.reduce((s, q) => s + q.value, 0) / inWindow.length;
+  });
+}
+
+let totalDebtShowFull = false;
+window.toggleTotalDebtRange = function () {
+  totalDebtShowFull = !totalDebtShowFull;
+  document.getElementById('totalDebtRangeToggle').textContent = totalDebtShowFull ? 'Show Last 6 Months' : 'Show Full History';
+  renderTotalDebtChart();
+};
+
 let totalDebtChartInstance = null;
 function renderTotalDebtChart() {
   const ctx = document.getElementById('totalDebtChart');
   if (!ctx) return;
-  const sorted = cashFlowHistory.slice().sort((a, b) => a.date.localeCompare(b.date));
+  let sorted = cashFlowHistory.slice().sort((a, b) => a.date.localeCompare(b.date));
+  if (!totalDebtShowFull) sorted = sorted.slice(-6);
   if (totalDebtChartInstance) totalDebtChartInstance.destroy();
   if (sorted.length < 2) {
     setChartEmptyState(ctx, 'Needs 2+ months of data to plot a trend — this fills in automatically as you keep using the app.');
     return;
   }
   setChartEmptyState(ctx, null);
+  const totals = sorted.map(s => s.totalDebt);
   totalDebtChartInstance = new Chart(ctx, {
     type: 'line',
     data: {
       labels: sorted.map(s => s.date),
-      datasets: [{
-        label: 'Total Debt',
-        data: sorted.map(s => s.totalDebt),
-        borderColor: '#8C3B2E',
-        backgroundColor: '#8C3B2E',
-        tension: 0.15,
-      }],
+      datasets: [
+        {
+          label: 'Total Debt',
+          data: totals,
+          borderColor: '#8C3B2E',
+          backgroundColor: '#8C3B2E',
+          tension: 0.15,
+        },
+        {
+          label: '3-Month Avg',
+          data: rollingAverageByCount(totals, 3),
+          borderColor: '#5B6472',
+          backgroundColor: '#5B6472',
+          borderDash: [5, 4],
+          pointRadius: 0,
+          tension: 0.15,
+        },
+      ],
     },
     options: {
       responsive: true,
@@ -1642,7 +1802,7 @@ function renderTotalDebtChart() {
         y: { grid: { color: '#D6D0C0' }, ticks: { callback: v => '$' + v.toLocaleString() } },
         x: { grid: { color: '#D6D0C0' } },
       },
-      plugins: { legend: { display: false } },
+      plugins: { legend: { position: 'bottom', labels: { font: { family: 'Inter' } } } },
     },
   });
 }
@@ -1685,55 +1845,137 @@ function renderCategoryChart() {
   });
 }
 
-let balanceChartInstance = null;
-function renderBalanceChart() {
-  const ctx = document.getElementById('balanceChart');
-  if (!ctx) return;
-  const byAccount = {};
-  balanceHistory.forEach(h => {
-    const acct = accounts.find(a => a.id === h.accountId);
-    const name = acct ? acct.name : 'Unknown';
-    if (!byAccount[name]) byAccount[name] = {};
-    byAccount[name][h.date] = Number(h.balance) || 0;
+let cardTrendShowFull = false;
+window.toggleCardTrendRange = function () {
+  cardTrendShowFull = !cardTrendShowFull;
+  document.getElementById('cardTrendRangeToggle').textContent = cardTrendShowFull ? 'Show Last 6 Months' : 'Show Full History';
+  renderCardTrendChart();
+};
+
+// Buckets a card's raw balance-history entries into one row per month:
+// end-of-month balance (last entry on file that month) and total paid
+// that month (sum of paymentAmount). Smooths biweekly noise into a
+// monthly view, which is what both the chart and the bar series want.
+function getMonthlyCardSeries(accountId) {
+  const entries = balanceHistory.filter(h => h.accountId === accountId)
+    .map(h => ({ date: new Date(h.date + 'T00:00:00'), balance: Number(h.balance) || 0, paid: Number(h.paymentAmount) || 0 }))
+    .sort((a, b) => a.date - b.date);
+  const byMonth = new Map();
+  entries.forEach(e => {
+    const key = `${e.date.getFullYear()}-${String(e.date.getMonth() + 1).padStart(2, '0')}`;
+    if (!byMonth.has(key)) byMonth.set(key, { month: key, endBalance: e.balance, paid: 0 });
+    const bucket = byMonth.get(key);
+    bucket.endBalance = e.balance; // entries are date-sorted, so last write wins = end-of-month
+    bucket.paid += e.paid;
   });
+  return [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
+}
 
-  // Chart.js's time-scale x-axis needs a separate date-adapter library that
-  // isn't loaded here — using it silently produces a blank chart even with
-  // real data. A shared category axis built from actual dates needs no
-  // extra dependency and is just as accurate for how this data comes in
-  // (accounts mostly get updated together via the biweekly sign-off).
-  const labels = [...new Set(balanceHistory.map(h => h.date))].sort();
+let cardTrendChartInstance = null;
+window.renderCardTrendChart = function () {
+  const ctx = document.getElementById('cardTrendChart');
+  const sel = document.getElementById('trendCardSelect');
+  const statsEl = document.getElementById('cardTrendStats');
+  if (!ctx || !sel) return;
 
-  if (balanceChartInstance) balanceChartInstance.destroy();
-  if (labels.length === 0) {
-    setChartEmptyState(ctx, 'No balance history yet — add an entry or run a biweekly review.');
+  // The dropdown is a .account-select, refreshed elsewhere with a blank
+  // "— None —" leading option; default to the first real account so the
+  // chart has something to show without an extra click.
+  if (!sel.value && accounts.length > 0) sel.value = accounts[0].id;
+  const accountId = sel.value;
+  const account = accounts.find(a => a.id === accountId);
+
+  if (cardTrendChartInstance) cardTrendChartInstance.destroy();
+  if (!accountId || !account) {
+    setChartEmptyState(ctx, 'Select a card above to see its balance trend.');
+    if (statsEl) statsEl.innerHTML = '';
+    return;
+  }
+
+  const allHistory = balanceHistory.filter(h => h.accountId === accountId);
+  renderCardTrendStats(account, allHistory);
+
+  let series = getMonthlyCardSeries(accountId);
+  if (!cardTrendShowFull) series = series.slice(-6);
+
+  if (series.length < 2) {
+    setChartEmptyState(ctx, series.length === 0
+      ? 'No balance history for this card yet.'
+      : 'Needs 2+ months of history in this range to plot a trend — try Show Full History.');
     return;
   }
   setChartEmptyState(ctx, null);
 
-  const palette = ['#A8763E', '#34513A', '#8C3B2E', '#5B6472', '#1C2430', '#B98F5E'];
-  const datasets = Object.keys(byAccount).map((name, i) => ({
-    label: name,
-    data: labels.map(d => byAccount[name][d] ?? null),
-    spanGaps: true,
-    borderColor: palette[i % palette.length],
-    backgroundColor: palette[i % palette.length],
-    tension: 0.15,
-    fill: false,
-  }));
-
-  balanceChartInstance = new Chart(ctx, {
+  const balances = series.map(s => s.endBalance);
+  cardTrendChartInstance = new Chart(ctx, {
     type: 'line',
-    data: { labels: labels.map(d => fmtDate(d)), datasets },
+    data: {
+      labels: series.map(s => s.month),
+      datasets: [
+        {
+          type: 'bar',
+          label: 'Paid That Month',
+          data: series.map(s => s.paid),
+          backgroundColor: '#B98F5E99',
+          yAxisID: 'y1',
+          order: 2,
+        },
+        {
+          label: 'Balance',
+          data: balances,
+          borderColor: '#A8763E',
+          backgroundColor: '#A8763E',
+          tension: 0.15,
+          yAxisID: 'y',
+          order: 0,
+        },
+        {
+          label: '3-Month Avg',
+          data: rollingAverageByCount(balances, 3),
+          borderColor: '#5B6472',
+          backgroundColor: '#5B6472',
+          borderDash: [5, 4],
+          pointRadius: 0,
+          tension: 0.15,
+          yAxisID: 'y',
+          order: 1,
+        },
+      ],
+    },
     options: {
       responsive: true,
       scales: {
         x: { grid: { color: '#D6D0C0' } },
-        y: { grid: { color: '#D6D0C0' }, ticks: { callback: v => '$' + v.toLocaleString() } }
+        y: { position: 'left', grid: { color: '#D6D0C0' }, ticks: { callback: v => '$' + v.toLocaleString() }, title: { display: true, text: 'Balance' } },
+        y1: { position: 'right', grid: { display: false }, ticks: { callback: v => '$' + v.toLocaleString() }, title: { display: true, text: 'Paid' } },
       },
-      plugins: { legend: { position: 'bottom', labels: { font: { family: 'Inter' } } } }
-    }
+      plugins: { legend: { position: 'bottom', labels: { font: { family: 'Inter' } } } },
+    },
   });
+};
+
+function renderCardTrendStats(account, allHistory) {
+  const el = document.getElementById('cardTrendStats');
+  if (!el) return;
+  const balances = allHistory.map(h => Number(h.balance) || 0);
+  const latestBalance = Number(account.balance) || 0;
+  const utilization = (account.type === 'card' && Number(account.creditLimit) > 0)
+    ? (latestBalance / Number(account.creditLimit)) * 100 : null;
+  const maxBalance = balances.length ? Math.max(...balances) : null;
+  const minBalance = balances.length ? Math.min(...balances) : null;
+  const currentYear = new Date().getFullYear();
+  const paidYTD = allHistory
+    .filter(h => new Date(h.date + 'T00:00:00').getFullYear() === currentYear)
+    .reduce((s, h) => s + (Number(h.paymentAmount) || 0), 0);
+
+  el.innerHTML = `
+    <table class="ledger"><tbody>
+      <tr><td>Latest Balance</td><td class="num">${fmtMoney(latestBalance)}</td>
+          <td>Utilization</td><td class="num">${utilization !== null ? utilization.toFixed(0) + '%' : '—'}</td></tr>
+      <tr><td>Max Balance</td><td class="num">${maxBalance !== null ? fmtMoney(maxBalance) : '—'}</td>
+          <td>Min Balance</td><td class="num">${minBalance !== null ? fmtMoney(minBalance) : '—'}</td></tr>
+      <tr><td>Paid YTD (${currentYear})</td><td class="num" colspan="3">${fmtMoney(paidYTD)}</td></tr>
+    </tbody></table>`;
 }
 
 /* ---------------- SORTING HELPER ---------------- */
@@ -1761,7 +2003,9 @@ window.toggleSort = function (tableKey, key, renderFn) {
 function populateAccountSelects() {
   document.querySelectorAll('.account-select').forEach(sel => {
     const current = sel.value;
-    sel.innerHTML = accounts.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
+    const isDefaultCardSelect = sel.id === 'defaultCardSelect';
+    sel.innerHTML = (isDefaultCardSelect ? '' : '<option value="">— None —</option>')
+      + accounts.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
     if (current) sel.value = current;
   });
   const dcs = document.getElementById('defaultCardSelect');
@@ -1823,11 +2067,19 @@ const SAVINGS_FIELDS = [
   { key: 'note', label: 'Note', type: 'text' },
   { key: 'amount', label: 'Amount (negative for withdrawal)', type: 'number' },
 ];
+const ONE_TIME_EXPENSE_FIELDS = [
+  { key: 'date', label: 'Date', type: 'date' },
+  { key: 'item', label: 'Item', type: 'text' },
+  { key: 'category', label: 'Category', type: 'text' },
+  { key: 'amount', label: 'Amount', type: 'number' },
+  { key: 'accountId', label: 'Card (optional)', type: 'accountSelect' },
+];
 const EXPENSE_FIELDS = [
   { key: 'item', label: 'Item', type: 'text' },
   { key: 'category', label: 'Category (e.g. Housing, Utilities)', type: 'text' },
   { key: 'amount', label: 'Amount', type: 'number' },
   { key: 'dueDay', label: 'Due Day of Month (1-31, for calendar)', type: 'number' },
+  { key: 'personalAccount', label: 'Paid From Personal Account (not joint)', type: 'checkbox' },
 ];
 const SEMIMONTHLY_EXPENSE_FIELDS = [
   { key: 'item', label: 'Item', type: 'text' },
@@ -1835,6 +2087,7 @@ const SEMIMONTHLY_EXPENSE_FIELDS = [
   { key: 'amount', label: 'Amount (per occurrence)', type: 'number' },
   { key: 'dueDay', label: 'First Due Day (1-31)', type: 'number' },
   { key: 'dueDay2', label: 'Second Due Day (1-31)', type: 'number' },
+  { key: 'personalAccount', label: 'Paid From Personal Account (not joint)', type: 'checkbox' },
 ];
 const BIWEEKLY_EXPENSE_FIELDS = [
   { key: 'item', label: 'Item', type: 'text' },
@@ -1867,7 +2120,7 @@ function fieldInputHTML(f, value) {
       `<option value="${o}" ${v === o ? 'selected' : ''}>${o}</option>`).join('')}</select>`;
   }
   if (f.type === 'accountSelect') {
-    return `<select id="f_${f.key}" class="account-select">${accounts.map(a =>
+    return `<select id="f_${f.key}" class="account-select"><option value="" ${!v ? 'selected' : ''}>— None —</option>${accounts.map(a =>
       `<option value="${a.id}" ${v === a.id ? 'selected' : ''}>${a.name}</option>`).join('')}</select>`;
   }
   if (f.type === 'checkbox') {
@@ -2123,6 +2376,13 @@ async function saveBulkBalance() {
   alert(`Logged ${count} card(s) for ${fmtDate(date)}.`);
 }
 
+let balanceLogVisible = false;
+window.toggleBalanceLogVisible = function () {
+  balanceLogVisible = !balanceLogVisible;
+  document.getElementById('balanceHistoryTable').style.display = balanceLogVisible ? 'block' : 'none';
+  document.getElementById('balanceLogToggle').textContent = balanceLogVisible ? 'Hide Full Log' : 'Show Full Log';
+};
+
 function renderBalanceHistory() {
   const el = document.getElementById('balanceHistoryTable');
   if (balanceHistory.length === 0) { el.innerHTML = `<div class="empty-state">No balance history yet.</div>`; return; }
@@ -2239,6 +2499,55 @@ function renderSavings() {
     </tbody></table>`;
 }
 
+/* ---------------- ONE-TIME / AD-HOC EXPENSES ---------------- */
+window.openOneTimeExpenseModal = function (existing) {
+  const prefill = existing || { date: new Date().toISOString().slice(0, 10) };
+  openModal(existing ? 'Edit One-Time Expense' : 'Add One-Time Expense', ONE_TIME_EXPENSE_FIELDS, 'oneTimeExpenses', prefill);
+};
+window.editOneTimeExpense = (id) => window.openOneTimeExpenseModal(oneTimeExpenses.find(e => e.id === id));
+window.deleteOneTimeExpense = (id) => deleteRow('oneTimeExpenses', id);
+
+window.clearOneTimeExpenses = async function () {
+  if (oneTimeExpenses.length === 0) { alert('No entries to clear.'); return; }
+  if (!confirm(`Delete all ${oneTimeExpenses.length} entr${oneTimeExpenses.length === 1 ? 'y' : 'ies'}? This can't be undone.`)) return;
+  const batch = writeBatch(db);
+  oneTimeExpenses.forEach(e => batch.delete(doc(db, 'oneTimeExpenses', e.id)));
+  await batch.commit();
+};
+
+function renderOneTimeExpenses() {
+  const el = document.getElementById('oneTimeExpenseTable');
+  if (!el) return;
+  if (oneTimeExpenses.length === 0) { el.innerHTML = `<div class="empty-state">No one-time expenses logged yet.</div>`; return; }
+  const rows = sortRows(oneTimeExpenses, 'oneTime', 'date');
+  const total = oneTimeExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  el.innerHTML = `
+    <table class="ledger"><thead><tr>
+      <th onclick="toggleSort('oneTime','date',renderOneTimeExpenses)">Date</th>
+      <th onclick="toggleSort('oneTime','item',renderOneTimeExpenses)">Item</th>
+      <th onclick="toggleSort('oneTime','category',renderOneTimeExpenses)">Category</th>
+      <th class="num" onclick="toggleSort('oneTime','amount',renderOneTimeExpenses)">Amount</th>
+      <th>Card</th>
+      <th></th>
+    </tr></thead><tbody>
+      ${rows.map(e => {
+        const acct = e.accountId ? accounts.find(a => a.id === e.accountId) : null;
+        return `<tr>
+          <td>${fmtDate(e.date)}</td>
+          <td>${e.item || '—'}</td>
+          <td>${e.category || '—'}</td>
+          <td class="num">${fmtMoney(e.amount)}</td>
+          <td>${acct ? acct.name : '—'}</td>
+          <td class="row-actions">
+            <button onclick="editOneTimeExpense('${e.id}')">Edit</button>
+            <button onclick="deleteOneTimeExpense('${e.id}')">Delete</button>
+          </td>
+        </tr>`;
+      }).join('')}
+      <tr><td colspan="3" style="font-weight:600;">Total</td><td class="num" style="font-weight:600;">${fmtMoney(total)}</td><td></td><td></td></tr>
+    </tbody></table>`;
+}
+
 /* ---------------- EXPENSES (monthly + biweekly share one collection) ---------------- */
 window.openExpenseModal = function (frequency, existing) {
   const schema = frequency === 'biweekly' ? BIWEEKLY_EXPENSE_FIELDS
@@ -2282,7 +2591,7 @@ function expenseTableHTML(rows, frequency, tableKey, renderFn) {
       ${rows.map(e => {
         const acct = e.accountId ? accounts.find(a => a.id === e.accountId) : null;
         return `<tr>
-          <td>${e.item || '—'}</td>
+          <td>${e.item || '—'}${e.personalAccount ? ' <span class="stamp brass">Personal</span>' : ''}</td>
           <td>${e.category || '—'}</td>
           <td class="num">${fmtMoney(e.amount)}</td>
           ${showDueDays ? `<td>${e.dueDay || '—'} &amp; ${e.dueDay2 || '—'}</td>` : ''}
@@ -2441,7 +2750,7 @@ window.exportAllData = function () {
   const sheets = {
     Accounts: accounts, BalanceHistory: balanceHistory, Income: income,
     Expenses: expenses, Projects: projects, CashFlowHistory: cashFlowHistory,
-    Savings: savings,
+    Savings: savings, OneTimeExpenses: oneTimeExpenses,
   };
   Object.entries(sheets).forEach(([name, rows]) => {
     const clean = rows.map(({ id, ...rest }) => {
