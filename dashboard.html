@@ -410,7 +410,10 @@
       <div class="card-row" id="dashboardCards"></div>
 
       <div class="panel">
-        <h2>Next 30 Days</h2>
+        <div class="toolbar">
+          <h2 style="margin:0;" id="next7Heading">Next 15 Days</h2>
+          <button class="btn-ghost btn" id="next7RangeToggle" onclick="toggleNext7Range()">Show 30 Days</button>
+        </div>
         <p class="panel-sub">Bills, card due dates, and income hitting soon — use this to gauge what's coming out of the account before setting pay amounts below.</p>
         <div id="next7Table" class="table-wrap"></div>
       </div>
@@ -967,6 +970,24 @@ function monthlyOccurrencesInRange(anchorDateStr, rangeStart, rangeEnd) {
   return results;
 }
 
+// For a plain "day of month" recurrence with no real start date (expense
+// Due Days) — re-clamps against each month's ACTUAL length rather than
+// deriving the day from one fixed anchor date. Building an anchor first
+// and reusing monthlyOccurrencesInRange would silently lock a 29th/30th/
+// 31st due day down to whatever the current month's shorter length is,
+// even in later months that could fit the real day.
+function dayOfMonthOccurrencesInRange(day, rangeStart, rangeEnd) {
+  const results = [];
+  let cursor = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1);
+  while (cursor <= rangeEnd) {
+    const dim = daysInMonth(cursor.getFullYear(), cursor.getMonth());
+    const occ = adjustForWeekend(new Date(cursor.getFullYear(), cursor.getMonth(), Math.min(day, dim)));
+    if (occ >= rangeStart && occ <= rangeEnd) results.push(occ);
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+  }
+  return results;
+}
+
 // Weekly/biweekly recurrence stepping by intervalDays from an anchor date.
 function intervalOccurrencesInRange(anchorDate, intervalDays, rangeStart, rangeEnd) {
   let d = new Date(anchorDate);
@@ -1007,15 +1028,13 @@ function generateUpcomingEvents(rangeDays, hideZeroBalance = true) {
   const events = [];
 
   expenses.filter(e => e.frequency === 'monthly' && e.dueDay).forEach(e => {
-    const anchor = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(Math.min(e.dueDay, 28)).padStart(2, '0')}`;
-    monthlyOccurrencesInRange(anchor, today, rangeEnd).forEach(d =>
+    dayOfMonthOccurrencesInRange(e.dueDay, today, rangeEnd).forEach(d =>
       events.push({ date: d, type: 'expense', label: e.item, amount: e.amount, personal: !!e.personalAccount }));
   });
 
   expenses.filter(e => e.frequency === 'semimonthly' && (e.dueDay || e.dueDay2)).forEach(e => {
     [e.dueDay, e.dueDay2].filter(Boolean).forEach(day => {
-      const anchor = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(Math.min(day, 28)).padStart(2, '0')}`;
-      monthlyOccurrencesInRange(anchor, today, rangeEnd).forEach(d =>
+      dayOfMonthOccurrencesInRange(day, today, rangeEnd).forEach(d =>
         events.push({ date: d, type: 'expense', label: e.item, amount: e.amount, personal: !!e.personalAccount }));
     });
   });
@@ -1059,15 +1078,22 @@ function generateUpcomingEvents(rangeDays, hideZeroBalance = true) {
 const EVENT_TYPE_STAMP = { expense: 'brass', income: 'green', debt: '', review: 'brass' };
 const EVENT_TYPE_LABEL = { expense: 'Bill', income: 'Income', debt: 'Card Due', review: 'Card Review' };
 
+let next7RangeDays = 15;
+window.toggleNext7Range = function () {
+  next7RangeDays = next7RangeDays === 15 ? 30 : 15;
+  document.getElementById('next7RangeToggle').textContent = next7RangeDays === 15 ? 'Show 30 Days' : 'Show 15 Days';
+  document.getElementById('next7Heading').textContent = `Next ${next7RangeDays} Days`;
+  renderNext7Days();
+};
+
 function renderNext7Days() {
   const el = document.getElementById('next7Table');
   if (!el) return;
-  // 30 days, not 7 — wide enough to see what's coming out of the account
-  // before deciding pay amounts in the review below. Zero-amount events
-  // (a Due Day set with no real bill behind it, etc.) are just noise here.
-  const events = generateUpcomingEvents(30).filter(e => e.amount);
+  // Zero-amount events (a Due Day set with no real bill behind it, etc.)
+  // are just noise here.
+  const events = generateUpcomingEvents(next7RangeDays).filter(e => e.amount);
   if (events.length === 0) {
-    el.innerHTML = `<div class="empty-state">Nothing scheduled in the next 30 days.</div>`;
+    el.innerHTML = `<div class="empty-state">Nothing scheduled in the next ${next7RangeDays} days.</div>`;
     return;
   }
   el.innerHTML = `
