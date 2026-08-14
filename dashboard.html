@@ -369,6 +369,77 @@
     .row-actions button{font-size:13px;padding:4px 2px;}
 
     .modal{padding:20px;max-height:92vh;}
+
+    /* Biweekly Card Review and the Biweekly Update modal are the two
+       places you fill in several fields per card at once — a 5-6 column
+       table forces horizontal scrolling back and forth per row on a
+       393-430px phone, which is the exact "hard to enter data" problem.
+       Below this width, each row becomes its own stacked card instead:
+       one field per line, full-width inputs, no horizontal scroll. */
+    #signOffTable table.ledger,
+    #bulkBalanceRows table.ledger{
+      min-width:0;
+    }
+    #signOffTable table.ledger thead,
+    #bulkBalanceRows table.ledger thead{
+      display:none;
+    }
+    #signOffTable table.ledger tbody tr,
+    #bulkBalanceRows table.ledger tbody tr{
+      display:block;
+      background:var(--paper-raised);
+      border:1px solid var(--line);
+      border-radius:4px;
+      margin-bottom:12px;
+      padding:4px 14px;
+    }
+    #signOffTable table.ledger tbody tr:nth-child(even),
+    #bulkBalanceRows table.ledger tbody tr:nth-child(even){
+      background:var(--paper-raised);
+    }
+    #signOffTable table.ledger td,
+    #bulkBalanceRows table.ledger td{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:10px;
+      padding:10px 0;
+      border-bottom:1px solid var(--line);
+      text-align:left !important;
+    }
+    #signOffTable table.ledger tr td:last-child,
+    #bulkBalanceRows table.ledger tr td:last-child{
+      border-bottom:none;
+    }
+    #signOffTable table.ledger td::before,
+    #bulkBalanceRows table.ledger td::before{
+      content:attr(data-label);
+      font-family:var(--slab);
+      font-weight:600;
+      font-size:12.5px;
+      color:var(--ink-soft);
+      flex-shrink:0;
+    }
+    #signOffTable table.ledger td[data-label="Card"],
+    #bulkBalanceRows table.ledger td[data-label="Card"]{
+      padding-top:12px;
+      border-bottom:2px solid var(--brass);
+      margin-bottom:2px;
+    }
+    #signOffTable table.ledger td[data-label="Card"]::before,
+    #bulkBalanceRows table.ledger td[data-label="Card"]::before{
+      display:none;
+    }
+    #signOffTable table.ledger td[data-label="Card"] strong,
+    #bulkBalanceRows table.ledger td[data-label="Card"] strong{
+      font-family:var(--slab);
+      font-size:16px;
+    }
+    #signOffTable table.ledger td input,
+    #bulkBalanceRows table.ledger td input{
+      max-width:150px !important;
+      padding:9px 10px;
+    }
   }
 </style>
 </head>
@@ -1415,12 +1486,12 @@ function renderSignOffReview() {
           const payVal = s ? s.pay : (d ? d.pay : '0');
           return `
           <tr>
-            <td>${a.name}</td>
-            <td><input type="number" id="signoff_bal_${a.id}" value="${balVal}" style="width:100px;text-align:right;" oninput="recomputeSignOffSuggestions(); recomputeReviewSummary();"></td>
-            <td><input type="number" id="signoff_min_${a.id}" value="${minVal}" style="width:90px;text-align:right;" oninput="recomputeSignOffSuggestions(); recomputeReviewSummary();"></td>
-            <td><input type="date" id="signoff_due_${a.id}" value="${dueVal}" style="width:135px;"></td>
-            <td class="num" id="signoff_suggest_${a.id}">—</td>
-            <td><input type="number" id="signoff_pay_${a.id}" value="${payVal}" style="width:90px;text-align:right;" oninput="recomputeReviewSummary()"></td>
+            <td data-label="Card"><strong>${a.name}</strong></td>
+            <td class="num" data-label="Balance"><input type="number" id="signoff_bal_${a.id}" value="${balVal}" style="width:100%;max-width:140px;text-align:right;" oninput="recomputeSignOffSuggestions(); recomputeReviewSummary();"></td>
+            <td class="num" data-label="Minimum Due"><input type="number" id="signoff_min_${a.id}" value="${minVal}" style="width:100%;max-width:140px;text-align:right;" oninput="recomputeSignOffSuggestions(); recomputeReviewSummary();"></td>
+            <td data-label="Due Date"><input type="date" id="signoff_due_${a.id}" value="${dueVal}" style="width:100%;max-width:160px;"></td>
+            <td class="num" data-label="Suggested Payment" id="signoff_suggest_${a.id}">—</td>
+            <td class="num" data-label="Amount to Pay"><input type="number" id="signoff_pay_${a.id}" value="${payVal}" style="width:100%;max-width:140px;text-align:right;" oninput="recomputeReviewSummary()"></td>
           </tr>`;
         }).join('')}
       </tbody>
@@ -2657,9 +2728,9 @@ window.renderBulkBalanceRows = function () {
       <tbody>
         ${rows.map(a => `
           <tr>
-            <td>${a.name}</td>
-            <td><input type="number" id="bulk_bal_${a.id}" value="${a.balance ?? ''}" style="width:100px;text-align:right;"></td>
-            <td><input type="number" id="bulk_min_${a.id}" value="${a.minPayment ?? ''}" style="width:90px;text-align:right;"></td>
+            <td data-label="Card"><strong>${a.name}</strong></td>
+            <td class="num" data-label="Balance"><input type="number" id="bulk_bal_${a.id}" value="${a.balance ?? ''}" style="width:100%;max-width:140px;text-align:right;"></td>
+            <td class="num" data-label="Minimum Due"><input type="number" id="bulk_min_${a.id}" value="${a.minPayment ?? ''}" style="width:100%;max-width:140px;text-align:right;"></td>
           </tr>`).join('')}
       </tbody>
     </table>`;
