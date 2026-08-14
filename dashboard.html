@@ -1510,7 +1510,7 @@ window.recomputeSignOffSuggestions = function (idsToSeed) {
     const suggestedTotal = r.minimumDue + r.aboveMin * scale;
     const suggestEl = document.getElementById('signoff_suggest_' + r.id);
     if (suggestEl) {
-      suggestEl.textContent = fmtMoney(suggestedTotal)
+      suggestEl.innerHTML = fmtMoney(suggestedTotal)
         + (scale < 1 ? ` <span style="color:var(--rust);font-size:11px;">(trimmed to protect $${document.getElementById('overdraftBufferInput')?.value || 300} reserve)</span>` : '');
     }
     if (seedSet.has(r.id)) {
