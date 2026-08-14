@@ -334,6 +334,41 @@
     font-size:13.5px;
   }
 
+  .summary-list{
+    border:1px solid var(--line);
+    border-radius:3px;
+    overflow:hidden;
+  }
+  .summary-row{
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    gap:14px;
+    padding:10px 14px;
+    border-bottom:1px solid var(--line);
+    font-size:13.5px;
+  }
+  .summary-row:last-child{border-bottom:none;}
+  .summary-row:nth-child(even){background:rgba(214,208,192,.18);}
+  .summary-row span{flex:1;min-width:0;}
+  .summary-row em{
+    display:block;
+    font-style:normal;
+    font-weight:400;
+    color:var(--ink-soft);
+    font-size:11.5px;
+    margin-top:2px;
+  }
+  .summary-row strong{
+    font-family:var(--mono);
+    font-variant-numeric:tabular-nums;
+    white-space:nowrap;
+    flex-shrink:0;
+  }
+  .summary-row-final{background:var(--paper-raised);}
+  .summary-row-final span, .summary-row-final strong{font-weight:600;}
+  .summary-row-warn, .summary-row-warn span, .summary-row-warn strong{color:var(--rust);}
+
   .table-wrap{
     overflow-x:auto;
     -webkit-overflow-scrolling:touch;
@@ -556,7 +591,7 @@
           </div>
         </div>
         <div id="signOffTable" class="table-wrap"></div>
-        <div id="reviewSummary" class="table-wrap" style="margin-top:10px;"></div>
+        <div id="reviewSummary" style="margin-top:10px;"></div>
         <p class="panel-sub" style="margin-top:10px;">Save keeps your progress without touching anything else in the app. Only Sign Off updates account balances, locks the entries into history, and reflects everywhere else.</p>
         <div style="margin-top:14px;" id="signOffActionBar">
           <button class="btn-ghost btn" onclick="saveSignOffDraft()">Save</button>
@@ -903,6 +938,7 @@ let oneTimeExpenses = [];
 let reviewDraft = null;
 let reviewDraftLoaded = false;
 let signOffManuallyAdded = new Set();
+let lastTotalSuggestedPayment = 0;
 let settings = { monthlyExtra: 0, splitRatio: 70, defaultCardId: '', reviewDay1: null, reviewDay2: null, overdraftBuffer: 300 };
 
 let unsubs = [];
@@ -1257,11 +1293,18 @@ function computeDebtPlan(extraAmount, balanceOverrides) {
     // compete with that.
     .filter(a => a.balance > 0 && !a.inProgram);
 
-  const urgentPromo = enriched.filter(a => a.promoActive && a.daysLeft <= PULL_FORWARD_DAYS)
+  // Student loans are typically a fixed-schedule autopay obligation, not
+  // something to accelerate ahead of high-APR revolving debt. Defer them
+  // entirely from the priority order — unless they're literally the only
+  // debt left, in which case there's nothing else to prioritize anyway.
+  const nonStudentLoan = enriched.filter(a => a.type !== 'studentloan');
+  const pool = nonStudentLoan.length > 0 ? nonStudentLoan : enriched;
+
+  const urgentPromo = pool.filter(a => a.promoActive && a.daysLeft <= PULL_FORWARD_DAYS)
     .sort((a, b) => a.daysLeft - b.daysLeft);
-  const byAPR = enriched.filter(a => !a.promoActive)
+  const byAPR = pool.filter(a => !a.promoActive)
     .sort((a, b) => b.normalAPR - a.normalAPR);
-  const safePromo = enriched.filter(a => a.promoActive && a.daysLeft > PULL_FORWARD_DAYS)
+  const safePromo = pool.filter(a => a.promoActive && a.daysLeft > PULL_FORWARD_DAYS)
     .sort((a, b) => a.daysLeft - b.daysLeft);
 
   const order = [...urgentPromo, ...byAPR, ...safePromo];
@@ -1596,6 +1639,7 @@ window.recomputeSignOffSuggestions = function (idsToSeed) {
   const periodExtra = getPeriodExtra();
   const plan = computeDebtPlan(periodExtra, overrides);
   const spendByAccount = getMonthlySpendByAccount(); // monthly-equivalent, from linked biweekly expenses
+  const hasOtherDebt = eligible.some(a => a.type !== 'studentloan' && (Number(a.balance) || 0) > 0);
 
   // Pass 1: each card's uncapped suggestion. periodExtra above is now
   // itself already grounded in the real joint balance when one's been
@@ -1613,8 +1657,12 @@ window.recomputeSignOffSuggestions = function (idsToSeed) {
     // $0 extra from it. But minimum-only barely touches principal on a
     // card carrying real APR, so anything the cascade didn't already
     // boost gets a modest floor above minimum instead of sitting flat.
+    // Student loans are excluded from this floor too when there's other
+    // debt to prioritize — they're fixed-schedule autopay, not something
+    // to accelerate ahead of revolving high-APR balances.
+    const isDeferredStudentLoan = a.type === 'studentloan' && hasOtherDebt;
     const MIN_BUFFER_RATE = 0.10;
-    const extraBase = cascadeExtra > 0 ? cascadeExtra : minimumDue * MIN_BUFFER_RATE;
+    const extraBase = isDeferredStudentLoan ? 0 : (cascadeExtra > 0 ? cascadeExtra : minimumDue * MIN_BUFFER_RATE);
     // This card's own linked biweekly spend (groceries, gas, etc.) will
     // keep hitting it before the next review — without adding that back
     // in, "minimum + extra" can look like progress on paper while new
@@ -1645,8 +1693,10 @@ window.recomputeSignOffSuggestions = function (idsToSeed) {
     }
   }
 
+  let totalSuggested = 0;
   rows.forEach(r => {
     const suggestedTotal = r.minimumDue + r.aboveMin * scale;
+    totalSuggested += suggestedTotal;
     const suggestEl = document.getElementById('signoff_suggest_' + r.id);
     if (suggestEl) {
       suggestEl.innerHTML = fmtMoney(suggestedTotal)
@@ -1657,6 +1707,8 @@ window.recomputeSignOffSuggestions = function (idsToSeed) {
       if (payEl) payEl.value = suggestedTotal.toFixed(2);
     }
   });
+  lastTotalSuggestedPayment = totalSuggested;
+  recomputeReviewSummary();
 
   const poolLabel = document.getElementById('signOffPoolLabel');
   const usingRealBalance = document.getElementById('reviewJointBalance')?.value !== '';
@@ -1702,15 +1754,16 @@ window.recomputeReviewSummary = function () {
   const belowBuffer = remaining !== null && remaining < buffer;
 
   el.innerHTML = `
-    <table class="ledger">
-      <tbody>
-        <tr><td>Total Payments This Review</td><td class="num">${fmtMoney(totalPayments)}</td></tr>
-        <tr><td>Transfer to Personal Account <span style="font-weight:400;color:var(--ink-soft);">(next 14 days: phones, subscriptions, etc.)</span></td><td class="num">${fmtMoney(personalTransfer)}</td></tr>
-        <tr><td>Upcoming Joint Bills <span style="font-weight:400;color:var(--ink-soft);">(next 14 days, not tagged Personal)</span></td><td class="num">${fmtMoney(upcomingJointBills)}</td></tr>
-        <tr><td style="font-weight:600;${belowBuffer ? 'color:var(--rust);' : ''}">Remaining in Joint Account After</td>
-            <td class="num" style="font-weight:600;${belowBuffer ? 'color:var(--rust);' : ''}">${jointBalance !== null ? fmtMoney(remaining) : '— enter joint balance above —'}${belowBuffer ? ` <span class="stamp">Below $${buffer} reserve</span>` : ''}</td></tr>
-      </tbody>
-    </table>`;
+    <div class="summary-list">
+      <div class="summary-row"><span>Total Recommended Payment <em>(if you follow every Suggested Payment as-is)</em></span><strong>${fmtMoney(lastTotalSuggestedPayment)}</strong></div>
+      <div class="summary-row"><span>Total Payments This Review <em>(what's actually entered in Amount to Pay)</em></span><strong>${fmtMoney(totalPayments)}</strong></div>
+      <div class="summary-row"><span>Transfer to Personal Account <em>(next 14 days: phones, subscriptions, etc.)</em></span><strong>${fmtMoney(personalTransfer)}</strong></div>
+      <div class="summary-row"><span>Upcoming Joint Bills <em>(next 14 days, not tagged Personal)</em></span><strong>${fmtMoney(upcomingJointBills)}</strong></div>
+      <div class="summary-row summary-row-final ${belowBuffer ? 'summary-row-warn' : ''}">
+        <span>Remaining in Joint Account After</span>
+        <strong>${jointBalance !== null ? fmtMoney(remaining) : '— enter joint balance above —'}${belowBuffer ? ` <span class="stamp">Below $${buffer} reserve</span>` : ''}</strong>
+      </div>
+    </div>`;
 };
 
 // Saves current form state to a single shared draft doc — visible to
