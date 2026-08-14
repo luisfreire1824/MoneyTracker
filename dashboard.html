@@ -403,7 +403,7 @@
       justify-content:space-between;
       align-items:center;
       gap:10px;
-      padding:10px 0;
+      padding:6px 0;
       border-bottom:1px solid var(--line);
       text-align:left !important;
     }
@@ -416,13 +416,14 @@
       content:attr(data-label);
       font-family:var(--slab);
       font-weight:600;
-      font-size:12.5px;
+      font-size:12px;
       color:var(--ink-soft);
       flex-shrink:0;
     }
     #signOffTable table.ledger td[data-label="Card"],
     #bulkBalanceRows table.ledger td[data-label="Card"]{
-      padding-top:12px;
+      padding-top:8px;
+      padding-bottom:8px;
       border-bottom:2px solid var(--brass);
       margin-bottom:2px;
     }
@@ -433,13 +434,28 @@
     #signOffTable table.ledger td[data-label="Card"] strong,
     #bulkBalanceRows table.ledger td[data-label="Card"] strong{
       font-family:var(--slab);
-      font-size:16px;
+      font-size:15px;
     }
     #signOffTable table.ledger td input,
     #bulkBalanceRows table.ledger td input{
-      max-width:150px !important;
-      padding:9px 10px;
+      max-width:110px !important;
+      padding:5px 8px;
     }
+
+    /* Save/Sign Off shouldn't require scrolling past a whole list of
+       cards to reach — pin them to the bottom of the screen instead. */
+    #signOffActionBar{
+      position:sticky;
+      bottom:0;
+      margin:14px -16px -16px !important;
+      padding:12px 16px calc(12px + env(safe-area-inset-bottom));
+      background:var(--paper-raised);
+      border-top:1px solid var(--line);
+      display:flex;
+      gap:8px;
+      z-index:10;
+    }
+    #signOffActionBar .btn{flex:1;margin:0 !important;}
   }
 </style>
 </head>
@@ -510,6 +526,14 @@
         </div>
         <div class="toolbar">
           <div class="filters">
+            <label id="signOffAddCardWrap" style="text-transform:none;letter-spacing:0;font-size:12px;">
+              <select id="signOffAddCard" onchange="addSignOffCard(this.value)"><option value="">+ Add a card…</option></select>
+            </label>
+            <a href="#" id="signOffResetAdded" onclick="resetSignOffAdded(); return false;" style="font-size:12px;color:var(--ink-soft);display:none;">Reset to tracked cards</a>
+          </div>
+        </div>
+        <div class="toolbar">
+          <div class="filters">
             <label style="text-transform:none;letter-spacing:0;font-size:12px;">Review schedule, days of month:
               <input type="number" id="reviewDay1Input" min="1" max="31" style="width:55px;margin-left:6px;">
               <input type="number" id="reviewDay2Input" min="1" max="31" style="width:55px;">
@@ -520,7 +544,7 @@
         <div id="signOffTable" class="table-wrap"></div>
         <div id="reviewSummary" class="table-wrap" style="margin-top:10px;"></div>
         <p class="panel-sub" style="margin-top:10px;">Save keeps your progress without touching anything else in the app. Only Sign Off updates account balances, locks the entries into history, and reflects everywhere else.</p>
-        <div style="margin-top:14px;">
+        <div style="margin-top:14px;" id="signOffActionBar">
           <button class="btn-ghost btn" onclick="saveSignOffDraft()">Save</button>
           <button class="btn" onclick="confirmSignOff()">Sign Off</button>
         </div>
@@ -864,6 +888,7 @@ let savings = [];
 let oneTimeExpenses = [];
 let reviewDraft = null;
 let reviewDraftLoaded = false;
+let signOffManuallyAdded = new Set();
 let settings = { monthlyExtra: 0, splitRatio: 70, defaultCardId: '', reviewDay1: null, reviewDay2: null, overdraftBuffer: 300 };
 
 let unsubs = [];
@@ -1425,6 +1450,17 @@ function renderMilestoneBanner() {
     </div>`;
 }
 
+window.addSignOffCard = function (accountId) {
+  if (!accountId) return;
+  signOffManuallyAdded.add(accountId);
+  renderSignOffReview();
+};
+
+window.resetSignOffAdded = function () {
+  signOffManuallyAdded.clear();
+  renderSignOffReview();
+};
+
 function renderSignOffReview() {
   const tableEl = document.getElementById('signOffTable');
   const dateEl = document.getElementById('signOffDate');
@@ -1449,10 +1485,26 @@ function renderSignOffReview() {
   const ownerFilter = ownerSel.value.trim().toLowerCase();
 
   const allEligible = accounts.filter(a => !a.inProgram);
-  const displayed = ownerFilter ? allEligible.filter(a => (a.owner || '').trim().toLowerCase() === ownerFilter) : allEligible;
+  const ownerScoped = ownerFilter ? allEligible.filter(a => (a.owner || '').trim().toLowerCase() === ownerFilter) : allEligible;
+
+  // Default to cards that have actually been reviewed before (some balance
+  // history on file) — a never-tracked card is just clutter most reviews.
+  // Anything hidden this way can be brought back in via "+ Add Card" below,
+  // for this session.
+  const trackedIds = new Set(balanceHistory.map(h => h.accountId));
+  const displayed = ownerScoped.filter(a => trackedIds.has(a.id) || signOffManuallyAdded.has(a.id));
+  const hidden = ownerScoped.filter(a => !trackedIds.has(a.id) && !signOffManuallyAdded.has(a.id));
+
+  const addCardEl = document.getElementById('signOffAddCard');
+  if (addCardEl) {
+    addCardEl.innerHTML = `<option value="">+ Add a card…</option>` + hidden.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
+    addCardEl.parentElement.style.display = hidden.length ? '' : 'none';
+  }
+  const resetEl = document.getElementById('signOffResetAdded');
+  if (resetEl) resetEl.style.display = signOffManuallyAdded.size ? '' : 'none';
 
   if (displayed.length === 0) {
-    tableEl.innerHTML = `<div class="empty-state">No cards to review${ownerFilter ? ' for this owner' : ' — everything\'s tagged "In Program."'}</div>`;
+    tableEl.innerHTML = `<div class="empty-state">No previously-tracked cards to review${ownerFilter ? ' for this owner' : ''}${hidden.length ? ' — use "+ Add a card" above to bring one in.' : '.'}</div>`;
     document.getElementById('signOffPoolLabel').textContent = '';
     document.getElementById('reviewSummary').innerHTML = '';
     return;
