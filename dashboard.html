@@ -374,8 +374,8 @@
        places you fill in several fields per card at once — a 5-6 column
        table forces horizontal scrolling back and forth per row on a
        393-430px phone, which is the exact "hard to enter data" problem.
-       Below this width, each row becomes its own stacked card instead:
-       one field per line, full-width inputs, no horizontal scroll. */
+       Below this width, each row becomes its own compact card instead:
+       a 2-column grid of fields, no horizontal scroll, no wasted width. */
     #signOffTable table.ledger,
     #bulkBalanceRows table.ledger{
       min-width:0;
@@ -386,12 +386,14 @@
     }
     #signOffTable table.ledger tbody tr,
     #bulkBalanceRows table.ledger tbody tr{
-      display:block;
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:2px 12px;
       background:var(--paper-raised);
       border:1px solid var(--line);
       border-radius:4px;
-      margin-bottom:12px;
-      padding:4px 14px;
+      margin-bottom:10px;
+      padding:8px 12px 10px;
     }
     #signOffTable table.ledger tbody tr:nth-child(even),
     #bulkBalanceRows table.ledger tbody tr:nth-child(even){
@@ -400,30 +402,24 @@
     #signOffTable table.ledger td,
     #bulkBalanceRows table.ledger td{
       display:flex;
-      justify-content:space-between;
-      align-items:center;
-      gap:10px;
-      padding:6px 0;
-      border-bottom:1px solid var(--line);
+      flex-direction:column;
+      align-items:flex-start;
+      padding:4px 0;
       text-align:left !important;
-    }
-    #signOffTable table.ledger tr td:last-child,
-    #bulkBalanceRows table.ledger tr td:last-child{
-      border-bottom:none;
     }
     #signOffTable table.ledger td::before,
     #bulkBalanceRows table.ledger td::before{
       content:attr(data-label);
       font-family:var(--slab);
       font-weight:600;
-      font-size:12px;
+      font-size:11px;
       color:var(--ink-soft);
-      flex-shrink:0;
+      margin-bottom:2px;
     }
     #signOffTable table.ledger td[data-label="Card"],
     #bulkBalanceRows table.ledger td[data-label="Card"]{
-      padding-top:8px;
-      padding-bottom:8px;
+      grid-column:1 / -1;
+      padding:4px 0 6px;
       border-bottom:2px solid var(--brass);
       margin-bottom:2px;
     }
@@ -436,10 +432,28 @@
       font-family:var(--slab);
       font-size:15px;
     }
+    #signOffTable table.ledger td[data-label="Amount to Pay"]{
+      grid-column:1 / -1;
+    }
     #signOffTable table.ledger td input,
     #bulkBalanceRows table.ledger td input{
-      max-width:110px !important;
-      padding:5px 8px;
+      width:100%;
+      max-width:none !important;
+      padding:6px 8px;
+      box-sizing:border-box;
+    }
+    #signOffTable table.ledger td[data-label="Suggested Payment"]{
+      font-family:var(--mono);
+      font-size:13px;
+    }
+
+    /* A short card list means the sticky bar's own natural position isn't
+       far below the viewport, so it starts overlapping real content (the
+       last card's actual input fields) instead of just empty space. This
+       buffer guarantees room for at least one full card above the bar
+       before it can ever cover anything you'd need to tap. */
+    #signOffTable{
+      padding-bottom:100px;
     }
 
     /* Save/Sign Off shouldn't require scrolling past a whole list of
@@ -529,7 +543,7 @@
             <label id="signOffAddCardWrap" style="text-transform:none;letter-spacing:0;font-size:12px;">
               <select id="signOffAddCard" onchange="addSignOffCard(this.value)"><option value="">+ Add a card…</option></select>
             </label>
-            <a href="#" id="signOffResetAdded" onclick="resetSignOffAdded(); return false;" style="font-size:12px;color:var(--ink-soft);display:none;">Reset to tracked cards</a>
+            <a href="#" id="signOffResetAdded" onclick="resetSignOffAdded(); return false;" style="font-size:12px;color:var(--ink-soft);display:none;">Reset to cards with a balance</a>
           </div>
         </div>
         <div class="toolbar">
@@ -1487,13 +1501,12 @@ function renderSignOffReview() {
   const allEligible = accounts.filter(a => !a.inProgram);
   const ownerScoped = ownerFilter ? allEligible.filter(a => (a.owner || '').trim().toLowerCase() === ownerFilter) : allEligible;
 
-  // Default to cards that have actually been reviewed before (some balance
-  // history on file) — a never-tracked card is just clutter most reviews.
-  // Anything hidden this way can be brought back in via "+ Add Card" below,
-  // for this session.
-  const trackedIds = new Set(balanceHistory.map(h => h.accountId));
-  const displayed = ownerScoped.filter(a => trackedIds.has(a.id) || signOffManuallyAdded.has(a.id));
-  const hidden = ownerScoped.filter(a => !trackedIds.has(a.id) && !signOffManuallyAdded.has(a.id));
+  // Default to cards that actually carry a balance right now — a card
+  // sitting at $0 (paid off, or never funded) is just clutter most
+  // reviews. Anything hidden this way can be brought back in via
+  // "+ Add a card" below, for this session.
+  const displayed = ownerScoped.filter(a => (Number(a.balance) || 0) > 0 || signOffManuallyAdded.has(a.id));
+  const hidden = ownerScoped.filter(a => !((Number(a.balance) || 0) > 0) && !signOffManuallyAdded.has(a.id));
 
   const addCardEl = document.getElementById('signOffAddCard');
   if (addCardEl) {
@@ -1504,7 +1517,7 @@ function renderSignOffReview() {
   if (resetEl) resetEl.style.display = signOffManuallyAdded.size ? '' : 'none';
 
   if (displayed.length === 0) {
-    tableEl.innerHTML = `<div class="empty-state">No previously-tracked cards to review${ownerFilter ? ' for this owner' : ''}${hidden.length ? ' — use "+ Add a card" above to bring one in.' : '.'}</div>`;
+    tableEl.innerHTML = `<div class="empty-state">No cards with a balance to review${ownerFilter ? ' for this owner' : ''}${hidden.length ? ' — use "+ Add a card" above to bring one in.' : '.'}</div>`;
     document.getElementById('signOffPoolLabel').textContent = '';
     document.getElementById('reviewSummary').innerHTML = '';
     return;
