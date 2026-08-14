@@ -792,6 +792,7 @@ let cashFlowHistory = [];
 let savings = [];
 let oneTimeExpenses = [];
 let reviewDraft = null;
+let reviewDraftLoaded = false;
 let settings = { monthlyExtra: 0, splitRatio: 70, defaultCardId: '', reviewDay1: null, reviewDay2: null, overdraftBuffer: 300 };
 
 let unsubs = [];
@@ -856,7 +857,8 @@ onAuthStateChanged(auth, (user) => {
 function startListeners() {
   unsubs.push(onSnapshot(collection(db, 'accounts'), snap => {
     accounts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderAccounts(); renderDashboard(); populateAccountSelects(); renderCardTrendChart(); renderNext7Days(); renderSignOffReview(); renderBalanceHistory(); renderExpenses();
+    renderAccounts(); renderDashboard(); populateAccountSelects(); renderCardTrendChart(); renderNext7Days(); renderBalanceHistory(); renderExpenses();
+    if (reviewDraftLoaded) renderSignOffReview();
   }));
   unsubs.push(onSnapshot(collection(db, 'balanceHistory'), snap => {
     balanceHistory = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -887,6 +889,7 @@ function startListeners() {
   }));
   unsubs.push(onSnapshot(doc(db, 'reviewDraft', 'current'), snap => {
     reviewDraft = snap.exists() ? snap.data() : null;
+    reviewDraftLoaded = true;
     renderSignOffReview();
   }));
   getDoc(doc(db, 'settings', 'main')).then(snap => {
