@@ -938,6 +938,7 @@ let oneTimeExpenses = [];
 let reviewDraft = null;
 let reviewDraftLoaded = false;
 let signOffManuallyAdded = new Set();
+let signOffExcludedBills = new Set();
 let lastTotalSuggestedPayment = 0;
 let settings = { monthlyExtra: 0, splitRatio: 70, defaultCardId: '', reviewDay1: null, reviewDay2: null, overdraftBuffer: 300 };
 
@@ -1035,6 +1036,7 @@ function startListeners() {
   }));
   unsubs.push(onSnapshot(doc(db, 'reviewDraft', 'current'), snap => {
     reviewDraft = snap.exists() ? snap.data() : null;
+    signOffExcludedBills = new Set((reviewDraft && reviewDraft.excludedBills) || []);
     reviewDraftLoaded = true;
     renderSignOffReview();
   }));
@@ -1187,13 +1189,13 @@ function generateUpcomingEvents(rangeDays, hideZeroBalance = true) {
 
   expenses.filter(e => e.frequency === 'monthly' && e.dueDay).forEach(e => {
     dayOfMonthOccurrencesInRange(e.dueDay, today, rangeEnd).forEach(({ date, shifted }) =>
-      events.push({ date, type: 'expense', label: e.item, amount: e.amount, personal: !!e.personalAccount, shifted }));
+      events.push({ date, type: 'expense', label: e.item, amount: e.amount, personal: !!e.personalAccount, shifted, expenseId: e.id }));
   });
 
   expenses.filter(e => e.frequency === 'semimonthly' && (e.dueDay || e.dueDay2)).forEach(e => {
     [e.dueDay, e.dueDay2].filter(Boolean).forEach(day => {
       dayOfMonthOccurrencesInRange(day, today, rangeEnd).forEach(({ date, shifted }) =>
-        events.push({ date, type: 'expense', label: e.item, amount: e.amount, personal: !!e.personalAccount, shifted }));
+        events.push({ date, type: 'expense', label: e.item, amount: e.amount, personal: !!e.personalAccount, shifted, expenseId: e.id }));
     });
   });
 
@@ -1254,6 +1256,7 @@ function renderNext7Days() {
     el.innerHTML = `<div class="empty-state">Nothing scheduled in the next ${next7RangeDays} days.</div>`;
     return;
   }
+  const expenseTotal = events.filter(e => e.type === 'expense').reduce((s, e) => s + (Number(e.amount) || 0), 0);
   el.innerHTML = `
     <table class="ledger"><thead><tr>
       <th>Date</th><th>Type</th><th>Item</th><th class="num">Amount</th>
@@ -1265,6 +1268,7 @@ function renderNext7Days() {
           <td>${e.label || '—'}</td>
           <td class="num">${fmtMoney(e.amount)}</td>
         </tr>`).join('')}
+      <tr><td colspan="3" style="font-weight:600;">Total Bills/Expenses</td><td class="num" style="font-weight:600;">${fmtMoney(expenseTotal)}</td></tr>
     </tbody></table>`;
 }
 
@@ -1429,11 +1433,21 @@ function getMostRecentScheduledReviewDate() {
 
 // Sums non-personal (i.e. joint-account) expenses due in the next 14 days —
 // the companion to computePersonalTransferAmount below, for money that's
-// about to leave the JOINT account specifically.
+// about to leave the JOINT account specifically. Excludes anything marked
+// "already reflected" — an autopaid bill that already left the account
+// before this review, so it shouldn't reduce available room a second time.
 function getUpcomingJointBills() {
-  return generateUpcomingEvents(14)
-    .filter(e => e.type === 'expense' && !e.personal)
+  return getUpcomingJointBillEvents()
+    .filter(e => !signOffExcludedBills.has(getBillKey(e)))
     .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+}
+
+function getUpcomingJointBillEvents() {
+  return generateUpcomingEvents(14).filter(e => e.type === 'expense' && !e.personal);
+}
+
+function getBillKey(e) {
+  return `${e.expenseId}_${e.date.toISOString().slice(0, 10)}`;
 }
 
 function getTotalMinimums(eligible) {
@@ -1628,29 +1642,40 @@ function getProjectedDueDate(accountId) {
 // Recomputes the "Suggested Payment" column live from whatever's currently
 // typed into the Balance fields — without touching whatever the person
 // has already typed into "Amount to Pay" (that field is theirs to override).
+// Resolves a field's value for ANY eligible account, regardless of whether
+// it's currently displayed (owner filter can hide it): live DOM value if
+// the row is on screen, else whatever's saved in the shared draft, else
+// blank. This is what makes the summary totals stable across owner-filter
+// changes — a hidden card's already-entered numbers still count instead
+// of silently defaulting to 0.
+function getSignOffFieldValue(accountId, field) {
+  const el = document.getElementById('signoff_' + field + '_' + accountId);
+  if (el) return el.value;
+  const d = reviewDraft && reviewDraft.rows ? reviewDraft.rows[accountId] : null;
+  return d && d[field] !== undefined ? d[field] : '';
+}
+
 window.recomputeSignOffSuggestions = function (idsToSeed) {
   const seedSet = idsToSeed instanceof Set ? idsToSeed : new Set();
   const eligible = accounts.filter(a => !a.inProgram);
   const overrides = {};
   eligible.forEach(a => {
-    const el = document.getElementById('signoff_bal_' + a.id);
-    if (el && el.value !== '') overrides[a.id] = Number(el.value);
+    const v = getSignOffFieldValue(a.id, 'bal');
+    if (v !== '') overrides[a.id] = Number(v);
   });
   const periodExtra = getPeriodExtra();
   const plan = computeDebtPlan(periodExtra, overrides);
   const spendByAccount = getMonthlySpendByAccount(); // monthly-equivalent, from linked biweekly expenses
   const hasOtherDebt = eligible.some(a => a.type !== 'studentloan' && (Number(a.balance) || 0) > 0);
 
-  // Pass 1: each card's uncapped suggestion. periodExtra above is now
-  // itself already grounded in the real joint balance when one's been
-  // entered (see getPeriodExtra), so this cascade is naturally sized
-  // correctly in the common case — Pass 2 below is a safety net, since
-  // the floor-buffer and periodSpend additions here sit outside the
-  // cascade's own pool and could still add up to more than what's real.
+  // Pass 1: each card's uncapped suggestion, across every eligible account
+  // household-wide — not just whatever's currently displayed under the
+  // owner filter — using the resolver above so hidden cards still
+  // contribute their real (or saved-draft) minimum, not zero.
   const rows = eligible.map(a => {
     const entry = plan.find(p => p.id === a.id);
-    const minEl = document.getElementById('signoff_min_' + a.id);
-    const minimumDue = minEl && minEl.value !== '' ? Number(minEl.value) : 0;
+    const minVal = getSignOffFieldValue(a.id, 'min');
+    const minimumDue = minVal !== '' ? Number(minVal) : (Number(a.minPayment) || 0);
     const cascadeExtra = entry ? entry.extraAllocation : 0;
     // The avalanche cascade concentrates the budgeted "extra" pool on
     // whichever card is top priority this cycle — everything else gets
@@ -1728,20 +1753,45 @@ function computePersonalTransferAmount() {
     .reduce((s, e) => s + (Number(e.amount) || 0), 0);
 }
 
+// Lists each upcoming joint bill occurrence with a checkbox — checking one
+// means "this already came out of the account, before I typed in the
+// balance above," excluding it from Upcoming Joint Bills so it doesn't
+// reduce available room a second time.
+function renderAlreadyReflectedBillsChecklist() {
+  const el = document.getElementById('alreadyReflectedBills');
+  if (!el) return;
+  const bills = getUpcomingJointBillEvents();
+  if (bills.length === 0) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <p style="font-size:12px;color:var(--ink-soft);margin:0 0 6px;">Already autopaid before this review? Check it off so it's not subtracted twice:</p>
+    ${bills.map(e => {
+      const key = getBillKey(e);
+      const checked = signOffExcludedBills.has(key);
+      return `<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;padding:4px 0;">
+        <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleReflectedBill('${key}')">
+        ${e.label || 'Bill'} — ${fmtMoney(e.amount)} (${fmtDate(e.date.toISOString().slice(0, 10))})
+      </label>`;
+    }).join('')}`;
+}
+
+window.toggleReflectedBill = function (key) {
+  if (signOffExcludedBills.has(key)) signOffExcludedBills.delete(key);
+  else signOffExcludedBills.add(key);
+  recomputeSignOffSuggestions(new Set());
+  recomputeReviewSummary();
+};
+
 window.recomputeReviewSummary = function () {
   const el = document.getElementById('reviewSummary');
   if (!el) return;
-  const ownerSel = document.getElementById('signOffOwnerFilter');
-  const ownerFilter = ownerSel ? ownerSel.value.trim().toLowerCase() : '';
-  const allEligible = accounts.filter(a => !a.inProgram);
-  const displayed = ownerFilter ? allEligible.filter(a => (a.owner || '').trim().toLowerCase() === ownerFilter) : allEligible;
+  const eligible = accounts.filter(a => !a.inProgram);
 
   let totalPayments = 0;
-  displayed.forEach(a => {
-    const balEl = document.getElementById('signoff_bal_' + a.id);
-    if (!balEl || balEl.value === '') return; // matches confirmSignOff's skip-blank rule
-    const payEl = document.getElementById('signoff_pay_' + a.id);
-    totalPayments += payEl && payEl.value !== '' ? Number(payEl.value) : 0;
+  eligible.forEach(a => {
+    const balVal = getSignOffFieldValue(a.id, 'bal');
+    if (balVal === '') return; // matches confirmSignOff's skip-blank rule — this card was never touched anywhere
+    const payVal = getSignOffFieldValue(a.id, 'pay');
+    totalPayments += payVal !== '' ? Number(payVal) : 0;
   });
 
   const personalTransfer = computePersonalTransferAmount();
@@ -1755,15 +1805,18 @@ window.recomputeReviewSummary = function () {
 
   el.innerHTML = `
     <div class="summary-list">
+      <div class="summary-row"><span>Joint Account Balance <em>(as entered above)</em></span><strong>${jointBalance !== null ? fmtMoney(jointBalance) : '—'}</strong></div>
       <div class="summary-row"><span>Total Recommended Payment <em>(if you follow every Suggested Payment as-is)</em></span><strong>${fmtMoney(lastTotalSuggestedPayment)}</strong></div>
       <div class="summary-row"><span>Total Payments This Review <em>(what's actually entered in Amount to Pay)</em></span><strong>${fmtMoney(totalPayments)}</strong></div>
       <div class="summary-row"><span>Transfer to Personal Account <em>(next 14 days: phones, subscriptions, etc.)</em></span><strong>${fmtMoney(personalTransfer)}</strong></div>
-      <div class="summary-row"><span>Upcoming Joint Bills <em>(next 14 days, not tagged Personal)</em></span><strong>${fmtMoney(upcomingJointBills)}</strong></div>
+      <div class="summary-row"><span>Upcoming Joint Bills <em>(next 14 days, not tagged Personal, not already reflected below)</em></span><strong>${fmtMoney(upcomingJointBills)}</strong></div>
       <div class="summary-row summary-row-final ${belowBuffer ? 'summary-row-warn' : ''}">
         <span>Remaining in Joint Account After</span>
         <strong>${jointBalance !== null ? fmtMoney(remaining) : '— enter joint balance above —'}${belowBuffer ? ` <span class="stamp">Below $${buffer} reserve</span>` : ''}</strong>
       </div>
-    </div>`;
+    </div>
+    <div id="alreadyReflectedBills" style="margin-top:12px;"></div>`;
+  renderAlreadyReflectedBillsChecklist();
 };
 
 // Saves current form state to a single shared draft doc — visible to
@@ -1795,6 +1848,7 @@ window.saveSignOffDraft = async function () {
   const jointEl = document.getElementById('reviewJointBalance');
   await setDoc(doc(db, 'reviewDraft', 'current'), {
     date, jointBalance: jointEl && jointEl.value !== '' ? jointEl.value : null, rows,
+    excludedBills: [...signOffExcludedBills],
   }, { merge: true });
   alert(`Draft saved (${count} card${count === 1 ? '' : 's'}). Visible to both of you until you Sign Off.`);
 };
@@ -1846,6 +1900,8 @@ window.confirmSignOff = async function () {
     });
   }
   await batch.commit();
+  signOffExcludedBills.clear();
+  await setDoc(doc(db, 'reviewDraft', 'current'), { excludedBills: [] }, { merge: true });
   alert(`Signed off on ${count} card(s) for ${fmtDate(date)}. Locked into history.`);
 };
 
@@ -1886,6 +1942,7 @@ function renderDashboard() {
   renderMilestoneBanner();
   renderDashboardDebtStats();
   const totalDebt = accounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
+  const totalDebtExclProgram = accounts.filter(a => !a.inProgram).reduce((s, a) => s + (Number(a.balance) || 0), 0);
   const totalMinPayments = accounts.reduce((s, a) => s + (Number(a.minPayment) || 0), 0);
   const totalIncome = income.reduce((s, i) => s + monthlyEquivalent(Number(i.amount) || 0, i.frequency), 0);
   // Biweekly card expenses are excluded here on purpose: that spending
@@ -1918,7 +1975,11 @@ function renderDashboard() {
   const cards = document.getElementById('dashboardCards');
   cards.innerHTML = `
     <div class="stat-card negative">
-      <div class="label">Total Debt</div>
+      <div class="label">Total Debt (excl. In Program)</div>
+      <div class="value">${fmtMoney(totalDebtExclProgram)}</div>
+    </div>
+    <div class="stat-card negative">
+      <div class="label">Total Debt (All)</div>
       <div class="value">${fmtMoney(totalDebt)}</div>
     </div>
     <div class="stat-card">
