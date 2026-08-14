@@ -420,7 +420,7 @@
 
       <div class="panel" id="signOffReviewPanel">
         <h2>Biweekly Card Review</h2>
-        <p class="panel-sub">Enter each card's balance, minimum due, and when it's due. Suggested Payment updates live as you type, based on the paydown priority below — Amount to Pay is yours to set or override before signing off.</p>
+        <p class="panel-sub">Enter each card's balance, minimum due, and when it's due. Suggested Payment updates live as you type, based on the paydown priority below plus this card's expected charges before the next review — Amount to Pay is yours to set or override before signing off.</p>
         <div class="toolbar">
           <div class="filters">
             <label style="text-transform:none;letter-spacing:0;font-size:12px;">Review date:
@@ -430,6 +430,9 @@
               <select id="signOffOwnerFilter" onchange="renderSignOffReview()" style="margin-left:6px;">
                 <option value="">Both</option>
               </select>
+            </label>
+            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Joint account balance right now:
+              <input type="number" id="reviewJointBalance" style="width:110px;margin-left:6px;" oninput="recomputeSignOffSuggestions(new Set()); recomputeReviewSummary();">
             </label>
           </div>
           <span id="signOffPoolLabel" style="font-size:12.5px;color:var(--ink-soft);"></span>
@@ -444,13 +447,6 @@
           </div>
         </div>
         <div id="signOffTable" class="table-wrap"></div>
-        <div class="toolbar" style="margin-top:14px;">
-          <div class="filters">
-            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Joint account balance right now:
-              <input type="number" id="reviewJointBalance" style="width:110px;margin-left:6px;" oninput="recomputeReviewSummary()">
-            </label>
-          </div>
-        </div>
         <div id="reviewSummary" class="table-wrap" style="margin-top:10px;"></div>
         <p class="panel-sub" style="margin-top:10px;">Save keeps your progress without touching anything else in the app. Only Sign Off updates account balances, locks the entries into history, and reflects everywhere else.</p>
         <div style="margin-top:14px;">
@@ -464,8 +460,11 @@
         <p class="panel-sub">Hybrid strategy: highest-APR debt gets extra payments first, except 0% promo balances expiring within 3 months, which jump the queue so they clear before the rate flips.</p>
         <div class="toolbar">
           <div class="filters">
-            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Extra $/month:
-              <input type="number" id="monthlyExtraInput" style="width:100px;margin-left:6px;" value="0">
+            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Extra $/month <span style="color:var(--ink-soft);">(auto)</span>:
+              <input type="number" id="monthlyExtraInput" style="width:100px;margin-left:6px;background:var(--paper);" value="0" readonly>
+            </label>
+            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Keep in account:
+              <input type="number" id="overdraftBufferInput" style="width:80px;margin-left:6px;" value="300">
             </label>
             <label style="text-transform:none;letter-spacing:0;font-size:12px;">Split to debt:
               <input type="range" id="splitRatioInput" min="0" max="100" value="70" style="vertical-align:middle;">
@@ -474,6 +473,7 @@
           </div>
           <button class="btn-ghost btn" onclick="saveSettings()">Save</button>
         </div>
+        <p class="panel-sub">Extra is calculated automatically: income − recurring expenses − card minimums − the buffer you keep in the account. Adjust the buffer or debt/project split; the extra amount itself isn't hand-entered.</p>
         <div id="debtPlanTable" class="table-wrap"></div>
       </div>
 
@@ -792,7 +792,7 @@ let cashFlowHistory = [];
 let savings = [];
 let oneTimeExpenses = [];
 let reviewDraft = null;
-let settings = { monthlyExtra: 0, splitRatio: 70, defaultCardId: '', reviewDay1: null, reviewDay2: null };
+let settings = { monthlyExtra: 0, splitRatio: 70, defaultCardId: '', reviewDay1: null, reviewDay2: null, overdraftBuffer: 300 };
 
 let unsubs = [];
 let sortState = {}; // per-table current sort {key, dir}
@@ -897,6 +897,7 @@ function startListeners() {
       document.getElementById('splitRatioLabel').textContent = (settings.splitRatio ?? 70) + '%';
       document.getElementById('reviewDay1Input').value = settings.reviewDay1 ?? '';
       document.getElementById('reviewDay2Input').value = settings.reviewDay2 ?? '';
+      document.getElementById('overdraftBufferInput').value = settings.overdraftBuffer ?? 300;
       populateAccountSelects();
       renderDashboard();
     }
@@ -914,7 +915,7 @@ window.saveReviewSchedule = async function () {
 };
 
 window.saveSettings = async function () {
-  settings.monthlyExtra = Number(document.getElementById('monthlyExtraInput').value) || 0;
+  settings.overdraftBuffer = Number(document.getElementById('overdraftBufferInput').value) || 0;
   settings.splitRatio = Number(document.getElementById('splitRatioInput').value);
   await setDoc(doc(db, 'settings', 'main'), settings);
   renderDashboard();
@@ -1270,9 +1271,41 @@ function getMostRecentScheduledReviewDate() {
   return candidates.reduce((max, d) => d > max ? d : max);
 }
 
-// Monthly "extra" divided into a per-biweekly-period share, using the same
-// 2.166 biweekly-periods-per-month convention as monthlyEquivalent elsewhere.
+// Sums non-personal (i.e. joint-account) expenses due in the next 14 days —
+// the companion to computePersonalTransferAmount below, for money that's
+// about to leave the JOINT account specifically.
+function getUpcomingJointBills() {
+  return generateUpcomingEvents(14)
+    .filter(e => e.type === 'expense' && !e.personal)
+    .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+}
+
+function getTotalMinimums(eligible) {
+  return eligible.reduce((s, a) => {
+    const minEl = document.getElementById('signoff_min_' + a.id);
+    const val = minEl && minEl.value !== '' ? Number(minEl.value) : (Number(a.minPayment) || 0);
+    return s + val;
+  }, 0);
+}
+
+// The extra pool for this review's cascade. If a real joint-account balance
+// has been entered, THAT'S the source of truth — it already reflects
+// whatever's actually happened so far this month (income received, bills
+// already paid), which a flat monthly average can't. Only falls back to
+// the monthly-average estimate (income − expenses − minimums − buffer,
+// split by ratio) when no real balance has been typed in yet.
 function getPeriodExtra() {
+  const jointEl = document.getElementById('reviewJointBalance');
+  const jointBalance = jointEl && jointEl.value !== '' ? Number(jointEl.value) : null;
+  if (jointBalance !== null) {
+    const eligible = accounts.filter(a => !a.inProgram);
+    const bufferEl = document.getElementById('overdraftBufferInput');
+    const buffer = bufferEl && bufferEl.value !== '' ? Number(bufferEl.value) : (settings.overdraftBuffer ?? 300);
+    const room = jointBalance - computePersonalTransferAmount() - getUpcomingJointBills() - getTotalMinimums(eligible) - buffer;
+    const splitRatio = Number(document.getElementById('splitRatioInput').value) || settings.splitRatio || 70;
+    return Math.max(room, 0) * (splitRatio / 100);
+  }
+  // Fallback: no real balance entered yet — use the monthly-average estimate.
   const extra = Number(document.getElementById('monthlyExtraInput').value) || settings.monthlyExtra || 0;
   const splitRatio = Number(document.getElementById('splitRatioInput').value) || settings.splitRatio || 70;
   return (extra * (splitRatio / 100)) / 2.166;
@@ -1423,7 +1456,15 @@ window.recomputeSignOffSuggestions = function (idsToSeed) {
   });
   const periodExtra = getPeriodExtra();
   const plan = computeDebtPlan(periodExtra, overrides);
-  eligible.forEach(a => {
+  const spendByAccount = getMonthlySpendByAccount(); // monthly-equivalent, from linked biweekly expenses
+
+  // Pass 1: each card's uncapped suggestion. periodExtra above is now
+  // itself already grounded in the real joint balance when one's been
+  // entered (see getPeriodExtra), so this cascade is naturally sized
+  // correctly in the common case — Pass 2 below is a safety net, since
+  // the floor-buffer and periodSpend additions here sit outside the
+  // cascade's own pool and could still add up to more than what's real.
+  const rows = eligible.map(a => {
     const entry = plan.find(p => p.id === a.id);
     const minEl = document.getElementById('signoff_min_' + a.id);
     const minimumDue = minEl && minEl.value !== '' ? Number(minEl.value) : 0;
@@ -1434,17 +1475,57 @@ window.recomputeSignOffSuggestions = function (idsToSeed) {
     // card carrying real APR, so anything the cascade didn't already
     // boost gets a modest floor above minimum instead of sitting flat.
     const MIN_BUFFER_RATE = 0.10;
-    const extra = cascadeExtra > 0 ? cascadeExtra : minimumDue * MIN_BUFFER_RATE;
-    const suggestedTotal = minimumDue + extra;
-    const suggestEl = document.getElementById('signoff_suggest_' + a.id);
-    if (suggestEl) suggestEl.textContent = fmtMoney(suggestedTotal);
-    if (seedSet.has(a.id)) {
-      const payEl = document.getElementById('signoff_pay_' + a.id);
+    const extraBase = cascadeExtra > 0 ? cascadeExtra : minimumDue * MIN_BUFFER_RATE;
+    // This card's own linked biweekly spend (groceries, gas, etc.) will
+    // keep hitting it before the next review — without adding that back
+    // in, "minimum + extra" can look like progress on paper while new
+    // charges quietly offset it. periodSpend uses the same biweekly-period
+    // convention as getPeriodExtra (monthly ÷ 2.166).
+    const periodSpend = (spendByAccount[a.id] || 0) / 2.166;
+    return { id: a.id, minimumDue, aboveMin: extraBase + periodSpend };
+  });
+
+  // Pass 2: cap the total "above minimum" against the REAL joint balance
+  // entered for this review, net of everything else about to leave that
+  // account too (personal transfer, upcoming joint bills) — minimums are
+  // never touched, but the extra portion scales down proportionally if
+  // the uncapped suggestions would drop the account below the reserve.
+  const jointEl = document.getElementById('reviewJointBalance');
+  const jointBalance = jointEl && jointEl.value !== '' ? Number(jointEl.value) : null;
+  let scale = 1;
+  if (jointBalance !== null) {
+    const personalTransfer = computePersonalTransferAmount();
+    const upcomingJointBills = getUpcomingJointBills();
+    const bufferEl = document.getElementById('overdraftBufferInput');
+    const buffer = bufferEl && bufferEl.value !== '' ? Number(bufferEl.value) : (settings.overdraftBuffer ?? 300);
+    const totalMinimums = rows.reduce((s, r) => s + r.minimumDue, 0);
+    const totalAboveMin = rows.reduce((s, r) => s + r.aboveMin, 0);
+    const roomForExtra = jointBalance - personalTransfer - upcomingJointBills - totalMinimums - buffer;
+    if (totalAboveMin > 0 && roomForExtra < totalAboveMin) {
+      scale = Math.max(roomForExtra, 0) / totalAboveMin;
+    }
+  }
+
+  rows.forEach(r => {
+    const suggestedTotal = r.minimumDue + r.aboveMin * scale;
+    const suggestEl = document.getElementById('signoff_suggest_' + r.id);
+    if (suggestEl) {
+      suggestEl.textContent = fmtMoney(suggestedTotal)
+        + (scale < 1 ? ` <span style="color:var(--rust);font-size:11px;">(trimmed to protect $${document.getElementById('overdraftBufferInput')?.value || 300} reserve)</span>` : '');
+    }
+    if (seedSet.has(r.id)) {
+      const payEl = document.getElementById('signoff_pay_' + r.id);
       if (payEl) payEl.value = suggestedTotal.toFixed(2);
     }
   });
+
   const poolLabel = document.getElementById('signOffPoolLabel');
-  if (poolLabel) poolLabel.textContent = `Suggested extra pool this period: ${fmtMoney(periodExtra)} (on top of minimums; cards outside the pool still get a modest buffer above minimum)`;
+  const usingRealBalance = document.getElementById('reviewJointBalance')?.value !== '';
+  if (poolLabel) {
+    poolLabel.textContent = scale < 1
+      ? `Extra payments trimmed to ${Math.round(scale * 100)}% of plan — the real joint balance can't cover the full suggested extra while keeping the reserve.`
+      : `Suggested extra pool this period: ${fmtMoney(periodExtra)} (${usingRealBalance ? 'based on the joint balance you entered' : 'monthly-average estimate — enter a joint balance for a real number'}; cards outside the pool still get a modest buffer above minimum)`;
+  }
 };
 
 // Sums personal-account-tagged monthly/semimonthly expenses due in the next
@@ -1473,16 +1554,22 @@ window.recomputeReviewSummary = function () {
   });
 
   const personalTransfer = computePersonalTransferAmount();
+  const upcomingJointBills = getUpcomingJointBills();
   const jointEl = document.getElementById('reviewJointBalance');
   const jointBalance = jointEl && jointEl.value !== '' ? Number(jointEl.value) : null;
-  const remaining = jointBalance !== null ? jointBalance - totalPayments - personalTransfer : null;
+  const remaining = jointBalance !== null ? jointBalance - totalPayments - personalTransfer - upcomingJointBills : null;
+  const bufferEl = document.getElementById('overdraftBufferInput');
+  const buffer = bufferEl && bufferEl.value !== '' ? Number(bufferEl.value) : (settings.overdraftBuffer ?? 300);
+  const belowBuffer = remaining !== null && remaining < buffer;
 
   el.innerHTML = `
     <table class="ledger">
       <tbody>
         <tr><td>Total Payments This Review</td><td class="num">${fmtMoney(totalPayments)}</td></tr>
         <tr><td>Transfer to Personal Account <span style="font-weight:400;color:var(--ink-soft);">(next 14 days: phones, subscriptions, etc.)</span></td><td class="num">${fmtMoney(personalTransfer)}</td></tr>
-        <tr><td style="font-weight:600;">Remaining in Joint Account After</td><td class="num" style="font-weight:600;">${jointBalance !== null ? fmtMoney(remaining) : '— enter joint balance above —'}</td></tr>
+        <tr><td>Upcoming Joint Bills <span style="font-weight:400;color:var(--ink-soft);">(next 14 days, not tagged Personal)</span></td><td class="num">${fmtMoney(upcomingJointBills)}</td></tr>
+        <tr><td style="font-weight:600;${belowBuffer ? 'color:var(--rust);' : ''}">Remaining in Joint Account After</td>
+            <td class="num" style="font-weight:600;${belowBuffer ? 'color:var(--rust);' : ''}">${jointBalance !== null ? fmtMoney(remaining) : '— enter joint balance above —'}${belowBuffer ? ` <span class="stamp">Below $${buffer} reserve</span>` : ''}</td></tr>
       </tbody>
     </table>`;
 };
@@ -1619,6 +1706,17 @@ function renderDashboard() {
   const netFree = totalIncome - totalExpenses - totalMinPayments;
   const projectsBudgeted = projects.reduce((s, p) => s + (Number(p.budgetAllocated) || 0), 0);
   const projectsSpent = projects.reduce((s, p) => s + (Number(p.budgetSpent) || 0), 0);
+
+  // Extra $/month is no longer hand-typed — it's what's actually left
+  // after income, recurring expenses, and card minimums, minus a buffer
+  // kept in the account on purpose to avoid overdraft.
+  const bufferEl = document.getElementById('overdraftBufferInput');
+  if (bufferEl && bufferEl.value === '') bufferEl.value = settings.overdraftBuffer ?? 300;
+  const overdraftBuffer = bufferEl && bufferEl.value !== '' ? Number(bufferEl.value) : (settings.overdraftBuffer ?? 300);
+  const autoExtra = Math.max(netFree - overdraftBuffer, 0);
+  settings.monthlyExtra = autoExtra; // in-memory only; keeps the || settings.monthlyExtra fallback used elsewhere accurate
+  const extraInputEl = document.getElementById('monthlyExtraInput');
+  if (extraInputEl) extraInputEl.value = autoExtra.toFixed(2);
 
   const cardAccounts = accounts.filter(a => a.type === 'card' && Number(a.creditLimit) > 0);
   const totalCardBalance = cardAccounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
