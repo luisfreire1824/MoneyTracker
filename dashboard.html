@@ -567,11 +567,11 @@
                 <option value="">Both</option>
               </select>
             </label>
-            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Joint account balance right now:
-              <input type="number" id="reviewJointBalance" style="width:110px;margin-left:6px;" oninput="recomputeSignOffSuggestions(new Set()); recomputeReviewSummary();">
-            </label>
           </div>
           <span id="signOffPoolLabel" style="font-size:12.5px;color:var(--ink-soft);"></span>
+        </div>
+        <div class="toolbar">
+          <div class="filters" id="fundingAccountBalances"></div>
         </div>
         <div class="toolbar">
           <div class="filters">
@@ -719,6 +719,15 @@
 
     <!-- ---------- INCOME & EXPENSES ---------- -->
     <section id="tab-money" class="tab-content">
+      <div class="panel">
+        <div class="toolbar">
+          <h2 style="margin:0;">Accounts</h2>
+          <button class="btn" onclick="openFundingAccountModal()">+ Add Account</button>
+        </div>
+        <p class="panel-sub">Joint, plus any individual accounts you pay things from. Tag cards and expenses to whichever account actually pays them, tracked with its own balance each biweekly review.</p>
+        <div id="fundingAccountsTable" class="table-wrap"></div>
+      </div>
+
       <div class="panel">
         <div class="toolbar">
           <h2 style="margin:0;">Income</h2>
@@ -940,6 +949,7 @@ let reviewDraftLoaded = false;
 let signOffManuallyAdded = new Set();
 let signOffExcludedBills = new Set();
 let lastTotalSuggestedPayment = 0;
+let fundingAccounts = [];
 let settings = { monthlyExtra: 0, splitRatio: 70, defaultCardId: '', reviewDay1: null, reviewDay2: null, overdraftBuffer: 300 };
 
 let unsubs = [];
@@ -1033,6 +1043,10 @@ function startListeners() {
   unsubs.push(onSnapshot(collection(db, 'oneTimeExpenses'), snap => {
     oneTimeExpenses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderOneTimeExpenses(); renderCashFlowChart();
+  }));
+  unsubs.push(onSnapshot(collection(db, 'fundingAccounts'), snap => {
+    fundingAccounts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderFundingAccounts(); populateFundingAccountSelects(); if (reviewDraftLoaded) renderSignOffReview();
   }));
   unsubs.push(onSnapshot(doc(db, 'reviewDraft', 'current'), snap => {
     reviewDraft = snap.exists() ? snap.data() : null;
@@ -1189,13 +1203,13 @@ function generateUpcomingEvents(rangeDays, hideZeroBalance = true) {
 
   expenses.filter(e => e.frequency === 'monthly' && e.dueDay).forEach(e => {
     dayOfMonthOccurrencesInRange(e.dueDay, today, rangeEnd).forEach(({ date, shifted }) =>
-      events.push({ date, type: 'expense', label: e.item, amount: e.amount, personal: !!e.personalAccount, shifted, expenseId: e.id }));
+      events.push({ date, type: 'expense', label: e.item, amount: e.amount, shifted, expenseId: e.id, paidFromAccountId: resolveFundingAccountId(e) }));
   });
 
   expenses.filter(e => e.frequency === 'semimonthly' && (e.dueDay || e.dueDay2)).forEach(e => {
     [e.dueDay, e.dueDay2].filter(Boolean).forEach(day => {
       dayOfMonthOccurrencesInRange(day, today, rangeEnd).forEach(({ date, shifted }) =>
-        events.push({ date, type: 'expense', label: e.item, amount: e.amount, personal: !!e.personalAccount, shifted, expenseId: e.id }));
+        events.push({ date, type: 'expense', label: e.item, amount: e.amount, shifted, expenseId: e.id, paidFromAccountId: resolveFundingAccountId(e) }));
     });
   });
 
@@ -1278,7 +1292,7 @@ function renderNext7Days() {
 // the line so it's cleared (or close to it) before the rate flips.
 const PULL_FORWARD_DAYS = 90;
 
-function computeDebtPlan(extraAmount, balanceOverrides) {
+function computeDebtPlan(extraAmount, balanceOverrides, restrictToJointFunded) {
   const today = new Date();
   const enriched = accounts.map(a => {
     const balance = (balanceOverrides && balanceOverrides[a.id] !== undefined) ? balanceOverrides[a.id] : (Number(a.balance) || 0);
@@ -1297,12 +1311,23 @@ function computeDebtPlan(extraAmount, balanceOverrides) {
     // compete with that.
     .filter(a => a.balance > 0 && !a.inProgram);
 
+  // The sign-off suggestion pool is specifically Joint's own money — a
+  // card funded by a personal account shouldn't be able to receive an
+  // allocation from a pool it was never going to be paid from. The
+  // Dashboard's general strategy view doesn't pass this flag, so it still
+  // considers every card regardless of funding account.
+  let base = enriched;
+  if (restrictToJointFunded) {
+    const joint = getJointAccount();
+    base = enriched.filter(a => !joint || resolveFundingAccountId(a) === joint.id);
+  }
+
   // Student loans are typically a fixed-schedule autopay obligation, not
   // something to accelerate ahead of high-APR revolving debt. Defer them
   // entirely from the priority order — unless they're literally the only
   // debt left, in which case there's nothing else to prioritize anyway.
-  const nonStudentLoan = enriched.filter(a => a.type !== 'studentloan');
-  const pool = nonStudentLoan.length > 0 ? nonStudentLoan : enriched;
+  const nonStudentLoan = base.filter(a => a.type !== 'studentloan');
+  const pool = nonStudentLoan.length > 0 ? nonStudentLoan : base;
 
   const urgentPromo = pool.filter(a => a.promoActive && a.daysLeft <= PULL_FORWARD_DAYS)
     .sort((a, b) => a.daysLeft - b.daysLeft);
@@ -1431,11 +1456,11 @@ function getMostRecentScheduledReviewDate() {
   return candidates.reduce((max, d) => d > max ? d : max);
 }
 
-// Sums non-personal (i.e. joint-account) expenses due in the next 14 days —
-// the companion to computePersonalTransferAmount below, for money that's
-// about to leave the JOINT account specifically. Excludes anything marked
-// "already reflected" — an autopaid bill that already left the account
-// before this review, so it shouldn't reduce available room a second time.
+// Sums Joint-tagged expenses due in the next 14 days — the companion to
+// getTransferNeeds below, for money that's about to leave the JOINT
+// account specifically. Excludes anything marked "already reflected" — an
+// autopaid bill that already left the account before this review, so it
+// shouldn't reduce available room a second time.
 function getUpcomingJointBills() {
   return getUpcomingJointBillEvents()
     .filter(e => !signOffExcludedBills.has(getBillKey(e)))
@@ -1443,7 +1468,8 @@ function getUpcomingJointBills() {
 }
 
 function getUpcomingJointBillEvents() {
-  return generateUpcomingEvents(14).filter(e => e.type === 'expense' && !e.personal);
+  const joint = getJointAccount();
+  return generateUpcomingEvents(14).filter(e => e.type === 'expense' && joint && e.paidFromAccountId === joint.id);
 }
 
 function getBillKey(e) {
@@ -1451,11 +1477,14 @@ function getBillKey(e) {
 }
 
 function getTotalMinimums(eligible) {
-  return eligible.reduce((s, a) => {
-    const minEl = document.getElementById('signoff_min_' + a.id);
-    const val = minEl && minEl.value !== '' ? Number(minEl.value) : (Number(a.minPayment) || 0);
-    return s + val;
-  }, 0);
+  const joint = getJointAccount();
+  return eligible
+    .filter(a => !joint || resolveFundingAccountId(a) === joint.id)
+    .reduce((s, a) => {
+      const minEl = document.getElementById('signoff_min_' + a.id);
+      const val = minEl && minEl.value !== '' ? Number(minEl.value) : (Number(a.minPayment) || 0);
+      return s + val;
+    }, 0);
 }
 
 // The extra pool for this review's cascade. If a real joint-account balance
@@ -1465,13 +1494,14 @@ function getTotalMinimums(eligible) {
 // the monthly-average estimate (income − expenses − minimums − buffer,
 // split by ratio) when no real balance has been typed in yet.
 function getPeriodExtra() {
-  const jointEl = document.getElementById('reviewJointBalance');
-  const jointBalance = jointEl && jointEl.value !== '' ? Number(jointEl.value) : null;
+  const joint = getJointAccount();
+  const jointVal = joint ? getFundingAccountBalanceValue(joint.id) : '';
+  const jointBalance = jointVal !== '' ? Number(jointVal) : null;
   if (jointBalance !== null) {
     const eligible = accounts.filter(a => !a.inProgram);
     const bufferEl = document.getElementById('overdraftBufferInput');
     const buffer = bufferEl && bufferEl.value !== '' ? Number(bufferEl.value) : (settings.overdraftBuffer ?? 300);
-    const room = jointBalance - computePersonalTransferAmount() - getUpcomingJointBills() - getTotalMinimums(eligible) - buffer;
+    const room = jointBalance - getTotalTransferAmount() - getUpcomingJointBills() - getTotalMinimums(eligible) - buffer;
     const splitRatio = Number(document.getElementById('splitRatioInput').value) || settings.splitRatio || 70;
     return Math.max(room, 0) * (splitRatio / 100);
   }
@@ -1536,10 +1566,9 @@ function renderSignOffReview() {
   const tableEl = document.getElementById('signOffTable');
   const dateEl = document.getElementById('signOffDate');
   const ownerSel = document.getElementById('signOffOwnerFilter');
-  const jointEl = document.getElementById('reviewJointBalance');
   if (!tableEl || !dateEl || !ownerSel) return;
   if (!dateEl.value) dateEl.value = (reviewDraft && reviewDraft.date) || new Date().toISOString().slice(0, 10);
-  if (jointEl && jointEl.value === '' && reviewDraft && reviewDraft.jointBalance) jointEl.value = reviewDraft.jointBalance;
+  renderFundingAccountBalances();
 
   // Keep the owner dropdown in sync, same normalization approach as the
   // Accounts filter (trim/lowercase-dedupe so casing differences between
@@ -1664,14 +1693,17 @@ window.recomputeSignOffSuggestions = function (idsToSeed) {
     if (v !== '') overrides[a.id] = Number(v);
   });
   const periodExtra = getPeriodExtra();
-  const plan = computeDebtPlan(periodExtra, overrides);
+  const plan = computeDebtPlan(periodExtra, overrides, true);
   const spendByAccount = getMonthlySpendByAccount(); // monthly-equivalent, from linked biweekly expenses
   const hasOtherDebt = eligible.some(a => a.type !== 'studentloan' && (Number(a.balance) || 0) > 0);
+  const joint = getJointAccount();
 
   // Pass 1: each card's uncapped suggestion, across every eligible account
   // household-wide — not just whatever's currently displayed under the
   // owner filter — using the resolver above so hidden cards still
-  // contribute their real (or saved-draft) minimum, not zero.
+  // contribute their real (or saved-draft) minimum, not zero. Each row
+  // also carries which account actually pays it, since Pass 2 below caps
+  // each account's cards independently against that account's own balance.
   const rows = eligible.map(a => {
     const entry = plan.find(p => p.id === a.id);
     const minVal = getSignOffFieldValue(a.id, 'min');
@@ -1694,38 +1726,54 @@ window.recomputeSignOffSuggestions = function (idsToSeed) {
     // charges quietly offset it. periodSpend uses the same biweekly-period
     // convention as getPeriodExtra (monthly ÷ 2.166).
     const periodSpend = (spendByAccount[a.id] || 0) / 2.166;
-    return { id: a.id, minimumDue, aboveMin: extraBase + periodSpend };
+    return { id: a.id, minimumDue, aboveMin: extraBase + periodSpend, fundingAccountId: resolveFundingAccountId(a) };
   });
 
-  // Pass 2: cap the total "above minimum" against the REAL joint balance
-  // entered for this review, net of everything else about to leave that
-  // account too (personal transfer, upcoming joint bills) — minimums are
-  // never touched, but the extra portion scales down proportionally if
-  // the uncapped suggestions would drop the account below the reserve.
-  const jointEl = document.getElementById('reviewJointBalance');
-  const jointBalance = jointEl && jointEl.value !== '' ? Number(jointEl.value) : null;
-  let scale = 1;
-  if (jointBalance !== null) {
-    const personalTransfer = computePersonalTransferAmount();
-    const upcomingJointBills = getUpcomingJointBills();
-    const bufferEl = document.getElementById('overdraftBufferInput');
-    const buffer = bufferEl && bufferEl.value !== '' ? Number(bufferEl.value) : (settings.overdraftBuffer ?? 300);
-    const totalMinimums = rows.reduce((s, r) => s + r.minimumDue, 0);
-    const totalAboveMin = rows.reduce((s, r) => s + r.aboveMin, 0);
-    const roomForExtra = jointBalance - personalTransfer - upcomingJointBills - totalMinimums - buffer;
-    if (totalAboveMin > 0 && roomForExtra < totalAboveMin) {
-      scale = Math.max(roomForExtra, 0) / totalAboveMin;
+  // Pass 2: cap each funding account's cards against THAT account's own
+  // real balance, independently — a personal account's cards shouldn't be
+  // scaled by Joint's room, and vice versa. Joint additionally has to
+  // cover every transfer going out to the other accounts, since that
+  // money leaves Joint even though it doesn't fund a Joint-tagged card.
+  const bufferEl = document.getElementById('overdraftBufferInput');
+  const buffer = bufferEl && bufferEl.value !== '' ? Number(bufferEl.value) : (settings.overdraftBuffer ?? 300);
+  const rowsByAccount = new Map();
+  rows.forEach(r => {
+    if (!rowsByAccount.has(r.fundingAccountId)) rowsByAccount.set(r.fundingAccountId, []);
+    rowsByAccount.get(r.fundingAccountId).push(r);
+  });
+  const scaleByAccount = {};
+  let anyTrimmed = false;
+  fundingAccounts.forEach(acct => {
+    const acctRows = rowsByAccount.get(acct.id) || [];
+    if (acctRows.length === 0) return;
+    const balVal = getFundingAccountBalanceValue(acct.id);
+    if (balVal === '') { scaleByAccount[acct.id] = 1; return; } // no balance entered for this account yet — don't trim blind
+    const balance = Number(balVal);
+    const totalMinimums = acctRows.reduce((s, r) => s + r.minimumDue, 0);
+    const totalAboveMin = acctRows.reduce((s, r) => s + r.aboveMin, 0);
+    let room;
+    if (joint && acct.id === joint.id) {
+      room = balance - getTotalTransferAmount() - getUpcomingJointBills() - totalMinimums - buffer;
+    } else {
+      const ownBills = generateUpcomingEvents(14)
+        .filter(e => e.type === 'expense' && e.paidFromAccountId === acct.id && !signOffExcludedBills.has(getBillKey(e)))
+        .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+      room = balance - ownBills - totalMinimums - buffer;
     }
-  }
+    let scale = 1;
+    if (totalAboveMin > 0 && room < totalAboveMin) { scale = Math.max(room, 0) / totalAboveMin; anyTrimmed = true; }
+    scaleByAccount[acct.id] = scale;
+  });
 
   let totalSuggested = 0;
   rows.forEach(r => {
+    const scale = scaleByAccount[r.fundingAccountId] ?? 1;
     const suggestedTotal = r.minimumDue + r.aboveMin * scale;
     totalSuggested += suggestedTotal;
     const suggestEl = document.getElementById('signoff_suggest_' + r.id);
     if (suggestEl) {
       suggestEl.innerHTML = fmtMoney(suggestedTotal)
-        + (scale < 1 ? ` <span style="color:var(--rust);font-size:11px;">(trimmed to protect $${document.getElementById('overdraftBufferInput')?.value || 300} reserve)</span>` : '');
+        + (scale < 1 ? ` <span style="color:var(--rust);font-size:11px;">(trimmed to protect $${buffer} reserve)</span>` : '');
     }
     if (seedSet.has(r.id)) {
       const payEl = document.getElementById('signoff_pay_' + r.id);
@@ -1736,21 +1784,49 @@ window.recomputeSignOffSuggestions = function (idsToSeed) {
   recomputeReviewSummary();
 
   const poolLabel = document.getElementById('signOffPoolLabel');
-  const usingRealBalance = document.getElementById('reviewJointBalance')?.value !== '';
+  const jointBalVal = joint ? getFundingAccountBalanceValue(joint.id) : '';
+  const usingRealBalance = jointBalVal !== '';
   if (poolLabel) {
-    poolLabel.textContent = scale < 1
-      ? `Extra payments trimmed to ${Math.round(scale * 100)}% of plan — the real joint balance can't cover the full suggested extra while keeping the reserve.`
+    poolLabel.textContent = anyTrimmed
+      ? `Some cards' extra payments were trimmed — the real account balance can't cover the full suggested extra while keeping the $${buffer} reserve.`
       : `Suggested extra pool this period: ${fmtMoney(periodExtra)} (${usingRealBalance ? 'based on the joint balance you entered' : 'monthly-average estimate — enter a joint balance for a real number'}; cards outside the pool still get a modest buffer above minimum)`;
   }
 };
 
-// Sums personal-account-tagged monthly/semimonthly expenses due in the next
-// 14 days — i.e. before the next biweekly review — so there's a concrete
-// "transfer this much" number instead of a vague monthly estimate.
-function computePersonalTransferAmount() {
-  return generateUpcomingEvents(14)
-    .filter(e => e.type === 'expense' && e.personal)
-    .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+// Per-account breakdown of what Joint needs to send each individual
+// account: upcoming (14-day) expenses tagged to it, plus this review's
+// card payments for any card tagged to it — with the underlying line
+// items kept so the total can be traced back to exactly what makes it up.
+// Excludes anything marked "already reflected" (autopaid before this
+// review), same as the Joint bills calc.
+function getTransferNeeds() {
+  const joint = getJointAccount();
+  const others = fundingAccounts.filter(a => !joint || a.id !== joint.id);
+  const allBills = generateUpcomingEvents(14).filter(e => e.type === 'expense');
+  const eligibleCards = accounts.filter(a => !a.inProgram);
+
+  return others.map(acct => {
+    const expenseItems = allBills
+      .filter(e => e.paidFromAccountId === acct.id && !signOffExcludedBills.has(getBillKey(e)))
+      .map(e => ({ type: 'expense', label: e.label, amount: Number(e.amount) || 0, date: e.date }));
+
+    const cardItems = eligibleCards
+      .filter(c => resolveFundingAccountId(c) === acct.id)
+      .map(c => {
+        const balVal = getSignOffFieldValue(c.id, 'bal');
+        if (balVal === '') return null; // card not touched this review — nothing to transfer for it yet
+        const payVal = getSignOffFieldValue(c.id, 'pay');
+        return { type: 'card', label: c.name, amount: payVal !== '' ? Number(payVal) : 0 };
+      })
+      .filter(Boolean);
+
+    const total = [...expenseItems, ...cardItems].reduce((s, i) => s + i.amount, 0);
+    return { account: acct, expenseItems, cardItems, total };
+  }).filter(t => t.total > 0 || t.expenseItems.length > 0 || t.cardItems.length > 0);
+}
+
+function getTotalTransferAmount() {
+  return getTransferNeeds().reduce((s, t) => s + t.total, 0);
 }
 
 // Lists each upcoming joint bill occurrence with a checkbox — checking one
@@ -1785,35 +1861,74 @@ window.recomputeReviewSummary = function () {
   const el = document.getElementById('reviewSummary');
   if (!el) return;
   const eligible = accounts.filter(a => !a.inProgram);
+  const joint = getJointAccount();
 
-  let totalPayments = 0;
+  // Split payments by funding account — a personal-tagged card's payment
+  // must NOT also reduce Joint's remaining, since that money already
+  // shows up inside its own account's transfer/obligation total below.
+  let totalPaymentsAll = 0;
+  const paymentsByAccount = {};
   eligible.forEach(a => {
     const balVal = getSignOffFieldValue(a.id, 'bal');
-    if (balVal === '') return; // matches confirmSignOff's skip-blank rule — this card was never touched anywhere
+    if (balVal === '') return; // matches confirmSignOff's skip-blank rule — never touched anywhere
     const payVal = getSignOffFieldValue(a.id, 'pay');
-    totalPayments += payVal !== '' ? Number(payVal) : 0;
+    const amt = payVal !== '' ? Number(payVal) : 0;
+    totalPaymentsAll += amt;
+    const acctId = resolveFundingAccountId(a);
+    paymentsByAccount[acctId] = (paymentsByAccount[acctId] || 0) + amt;
   });
 
-  const personalTransfer = computePersonalTransferAmount();
-  const upcomingJointBills = getUpcomingJointBills();
-  const jointEl = document.getElementById('reviewJointBalance');
-  const jointBalance = jointEl && jointEl.value !== '' ? Number(jointEl.value) : null;
-  const remaining = jointBalance !== null ? jointBalance - totalPayments - personalTransfer - upcomingJointBills : null;
   const bufferEl = document.getElementById('overdraftBufferInput');
   const buffer = bufferEl && bufferEl.value !== '' ? Number(bufferEl.value) : (settings.overdraftBuffer ?? 300);
-  const belowBuffer = remaining !== null && remaining < buffer;
+  const transferNeeds = getTransferNeeds(); // per non-Joint account: {account, expenseItems, cardItems, total}
+  const totalTransfer = transferNeeds.reduce((s, t) => s + t.total, 0);
+  const upcomingJointBills = getUpcomingJointBills();
+
+  const jointBalVal = joint ? getFundingAccountBalanceValue(joint.id) : '';
+  const jointBalance = jointBalVal !== '' ? Number(jointBalVal) : null;
+  const jointPayments = joint ? (paymentsByAccount[joint.id] || 0) : 0;
+  const jointRemaining = jointBalance !== null ? jointBalance - jointPayments - totalTransfer - upcomingJointBills : null;
+  const jointBelowBuffer = jointRemaining !== null && jointRemaining < buffer;
+
+  const accountBlocks = fundingAccounts.map(acct => {
+    const isJoint = joint && acct.id === joint.id;
+    const balVal = getFundingAccountBalanceValue(acct.id);
+    const balance = balVal !== '' ? Number(balVal) : null;
+    if (isJoint) {
+      return `
+        <div class="summary-row summary-row-final ${jointBelowBuffer ? 'summary-row-warn' : ''}">
+          <span>${acct.name} (Joint) Balance <em>as entered — pays its own cards/bills, plus sends every transfer below</em></span>
+          <strong>${balance !== null ? fmtMoney(balance) : '—'}</strong>
+        </div>
+        <div class="summary-row"><span>&nbsp;&nbsp;− This review's Joint-funded card payments</span><strong>${fmtMoney(jointPayments)}</strong></div>
+        <div class="summary-row"><span>&nbsp;&nbsp;− Upcoming Joint bills <em>(next 14 days, not already reflected)</em></span><strong>${fmtMoney(upcomingJointBills)}</strong></div>
+        <div class="summary-row"><span>&nbsp;&nbsp;− Total transfers out (below)</span><strong>${fmtMoney(totalTransfer)}</strong></div>
+        <div class="summary-row summary-row-final ${jointBelowBuffer ? 'summary-row-warn' : ''}">
+          <span>&nbsp;&nbsp;= Remaining in Joint After</span>
+          <strong>${jointBalance !== null ? fmtMoney(jointRemaining) : '— enter balance above —'}${jointBelowBuffer ? ` <span class="stamp">Below $${buffer} reserve</span>` : ''}</strong>
+        </div>`;
+    }
+    const need = transferNeeds.find(t => t.account.id === acct.id);
+    const total = need ? need.total : 0;
+    const remaining = balance !== null ? balance - total : null;
+    const belowBuffer = remaining !== null && remaining < buffer;
+    const items = need ? [...need.expenseItems, ...need.cardItems] : [];
+    return `
+      <div class="summary-row"><span>${acct.name} Balance <em>as entered</em></span><strong>${balance !== null ? fmtMoney(balance) : '—'}</strong></div>
+      <div class="summary-row"><span>&nbsp;&nbsp;− Obligations this cycle ${items.length ? `<details style="display:inline;"><summary style="display:inline;cursor:pointer;color:var(--brass-dark);">(${items.length} item${items.length === 1 ? '' : 's'} — tap to see)</summary><div style="margin-top:4px;">${items.map(i => `${i.label || (i.type === 'card' ? 'Card payment' : 'Bill')}: ${fmtMoney(i.amount)}`).join('<br>')}</div></details>` : '(none yet)'}</span><strong>${fmtMoney(total)}</strong></div>
+      <div class="summary-row summary-row-final ${belowBuffer ? 'summary-row-warn' : ''}">
+        <span>&nbsp;&nbsp;= Remaining in ${acct.name} After ${total > (balance || 0) - buffer && balance !== null ? '<em>— needs a transfer from Joint</em>' : ''}</span>
+        <strong>${balance !== null ? fmtMoney(remaining) : '— enter balance above —'}${belowBuffer ? ` <span class="stamp">Below $${buffer} reserve</span>` : ''}</strong>
+      </div>`;
+  }).join('');
 
   el.innerHTML = `
     <div class="summary-list">
-      <div class="summary-row"><span>Joint Account Balance <em>(as entered above)</em></span><strong>${jointBalance !== null ? fmtMoney(jointBalance) : '—'}</strong></div>
-      <div class="summary-row"><span>Total Recommended Payment <em>(if you follow every Suggested Payment as-is)</em></span><strong>${fmtMoney(lastTotalSuggestedPayment)}</strong></div>
-      <div class="summary-row"><span>Total Payments This Review <em>(what's actually entered in Amount to Pay)</em></span><strong>${fmtMoney(totalPayments)}</strong></div>
-      <div class="summary-row"><span>Transfer to Personal Account <em>(next 14 days: phones, subscriptions, etc.)</em></span><strong>${fmtMoney(personalTransfer)}</strong></div>
-      <div class="summary-row"><span>Upcoming Joint Bills <em>(next 14 days, not tagged Personal, not already reflected below)</em></span><strong>${fmtMoney(upcomingJointBills)}</strong></div>
-      <div class="summary-row summary-row-final ${belowBuffer ? 'summary-row-warn' : ''}">
-        <span>Remaining in Joint Account After</span>
-        <strong>${jointBalance !== null ? fmtMoney(remaining) : '— enter joint balance above —'}${belowBuffer ? ` <span class="stamp">Below $${buffer} reserve</span>` : ''}</strong>
-      </div>
+      <div class="summary-row"><span>Total Recommended Payment <em>(if you follow every Suggested Payment as-is, all accounts)</em></span><strong>${fmtMoney(lastTotalSuggestedPayment)}</strong></div>
+      <div class="summary-row"><span>Total Payments This Review <em>(what's actually entered, all accounts)</em></span><strong>${fmtMoney(totalPaymentsAll)}</strong></div>
+    </div>
+    <div class="summary-list" style="margin-top:10px;">
+      ${accountBlocks}
     </div>
     <div id="alreadyReflectedBills" style="margin-top:12px;"></div>`;
   renderAlreadyReflectedBillsChecklist();
@@ -1845,9 +1960,13 @@ window.saveSignOffDraft = async function () {
   });
 
   const date = document.getElementById('signOffDate').value;
-  const jointEl = document.getElementById('reviewJointBalance');
+  const accountBalances = {};
+  fundingAccounts.forEach(a => {
+    const el = document.getElementById('fundingbal_' + a.id);
+    if (el && el.value !== '') accountBalances[a.id] = el.value;
+  });
   await setDoc(doc(db, 'reviewDraft', 'current'), {
-    date, jointBalance: jointEl && jointEl.value !== '' ? jointEl.value : null, rows,
+    date, accountBalances, rows,
     excludedBills: [...signOffExcludedBills],
   }, { merge: true });
   alert(`Draft saved (${count} card${count === 1 ? '' : 's'}). Visible to both of you until you Sign Off.`);
@@ -1889,14 +2008,20 @@ window.confirmSignOff = async function () {
     totalPayments += paymentAmount;
     count++;
   }
-  const jointEl = document.getElementById('reviewJointBalance');
-  const jointBalance = jointEl && jointEl.value !== '' ? Number(jointEl.value) : null;
-  const personalTransfer = computePersonalTransferAmount();
+  const joint = getJointAccount();
+  const jointBalVal = joint ? getFundingAccountBalanceValue(joint.id) : '';
+  const jointBalance = jointBalVal !== '' ? Number(jointBalVal) : null;
+  const totalTransfer = getTotalTransferAmount();
   if (jointBalance !== null) {
+    const accountBalances = {};
+    fundingAccounts.forEach(a => {
+      const v = getFundingAccountBalanceValue(a.id);
+      if (v !== '') accountBalances[a.id] = Number(v);
+    });
     const sessionRef = doc(collection(db, 'reviewSessions'));
     batch.set(sessionRef, {
-      date, jointAccountBalance: jointBalance, totalPayments, personalTransfer,
-      remaining: jointBalance - totalPayments - personalTransfer,
+      date, jointAccountBalance: jointBalance, totalPayments, totalTransfer, accountBalances,
+      remaining: jointBalance - totalPayments - totalTransfer,
     });
   }
   await batch.commit();
@@ -2577,6 +2702,93 @@ function populateAccountSelects() {
   if (dcs && settings.defaultCardId) dcs.value = settings.defaultCardId;
 }
 
+function populateFundingAccountSelects() {
+  document.querySelectorAll('.funding-account-select').forEach(sel => {
+    const current = sel.value;
+    sel.innerHTML = `<option value="">— Default (Joint) —</option>` + fundingAccounts.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
+    if (current) sel.value = current;
+  });
+}
+
+// Resolves a funding account's balance for the current review: live DOM
+// value if typed, else whatever's saved in the shared draft, else blank.
+// Same staged-over-draft-over-default pattern as getSignOffFieldValue,
+// just for the account-balance inputs instead of card rows.
+function getFundingAccountBalanceValue(accountId) {
+  const el = document.getElementById('fundingbal_' + accountId);
+  if (el) return el.value;
+  const saved = reviewDraft && reviewDraft.accountBalances ? reviewDraft.accountBalances[accountId] : undefined;
+  return saved !== undefined ? saved : '';
+}
+
+function renderFundingAccountBalances() {
+  const el = document.getElementById('fundingAccountBalances');
+  if (!el) return;
+  if (fundingAccounts.length === 0) {
+    el.innerHTML = `<span style="font-size:12.5px;color:var(--rust);">Add a Joint account on the Income &amp; Expenses tab before running a review.</span>`;
+    return;
+  }
+  // Preserve whatever's currently typed across a rebuild, same reasoning
+  // as the card rows below — an unrelated Firestore update shouldn't wipe
+  // balances mid-entry.
+  const staged = {};
+  fundingAccounts.forEach(a => {
+    const balEl = document.getElementById('fundingbal_' + a.id);
+    if (balEl) staged[a.id] = balEl.value;
+  });
+  el.innerHTML = fundingAccounts.map(a => {
+    const val = staged[a.id] !== undefined ? staged[a.id] : getFundingAccountBalanceValue(a.id);
+    return `<label style="text-transform:none;letter-spacing:0;font-size:12px;">${a.name}${a.isJoint ? ' (Joint)' : ''} balance:
+      <input type="number" id="fundingbal_${a.id}" value="${val}" style="width:100px;margin-left:4px;" oninput="recomputeSignOffSuggestions(new Set()); recomputeReviewSummary();">
+    </label>`;
+  }).join('');
+}
+
+// Returns the account explicitly marked as Joint, or the first funding
+// account if none is marked (covers the very first one someone creates).
+function getJointAccount() {
+  return fundingAccounts.find(a => a.isJoint) || fundingAccounts[0] || null;
+}
+
+// Resolves which funding account a card or expense is actually paid from —
+// an unset paidFromAccountId defaults to Joint, same as before this
+// feature existed (so nothing already tagged needs to change).
+function resolveFundingAccountId(item) {
+  if (item.paidFromAccountId) return item.paidFromAccountId;
+  const joint = getJointAccount();
+  return joint ? joint.id : null;
+}
+
+window.openFundingAccountModal = function (existing) {
+  openModal(existing && existing.id ? 'Edit Account' : 'Add Account', FUNDING_ACCOUNT_FIELDS, 'fundingAccounts', existing);
+};
+window.editFundingAccount = (id) => window.openFundingAccountModal(fundingAccounts.find(a => a.id === id));
+window.deleteFundingAccount = (id) => deleteRow('fundingAccounts', id);
+
+function renderFundingAccounts() {
+  const el = document.getElementById('fundingAccountsTable');
+  if (!el) return;
+  if (fundingAccounts.length === 0) {
+    el.innerHTML = `<div class="empty-state">No accounts yet — add "Joint" first (check "This is the main Joint account"), then any individual accounts you pay things from.</div>`;
+    return;
+  }
+  el.innerHTML = `
+    <table class="ledger"><thead><tr>
+      <th>Name</th><th>Owner</th><th></th><th></th>
+    </tr></thead><tbody>
+      ${fundingAccounts.map(a => `
+        <tr>
+          <td>${a.name || '—'}${a.isJoint ? ' <span class="stamp brass">Joint</span>' : ''}</td>
+          <td>${a.owner || '—'}</td>
+          <td class="row-actions">
+            <button onclick="editFundingAccount('${a.id}')">Edit</button>
+            <button onclick="deleteFundingAccount('${a.id}')">Delete</button>
+          </td>
+        </tr>`).join('')}
+    </tbody></table>`;
+}
+
+
 window.saveDefaultCard = async function () {
   settings.defaultCardId = document.getElementById('defaultCardSelect').value;
   await setDoc(doc(db, 'settings', 'main'), settings);
@@ -2610,6 +2822,7 @@ const ACCOUNT_FIELDS = [
   { key: 'promoAPRDate', label: '0% APR End Date', type: 'date' },
   { key: 'creditLimit', label: 'Credit Limit', type: 'number' },
   { key: 'minPayment', label: 'Minimum Payment', type: 'number' },
+  { key: 'paidFromAccountId', label: 'Paid From', type: 'fundingAccountSelect' },
 ];
 const BALANCE_HISTORY_FIELDS = [
   { key: 'accountId', label: 'Card / Loan', type: 'accountSelect' },
@@ -2632,6 +2845,11 @@ const SAVINGS_FIELDS = [
   { key: 'note', label: 'Note', type: 'text' },
   { key: 'amount', label: 'Amount (negative for withdrawal)', type: 'number' },
 ];
+const FUNDING_ACCOUNT_FIELDS = [
+  { key: 'name', label: 'Account Name (e.g. Joint, Luis Personal)', type: 'text' },
+  { key: 'owner', label: 'Owner (optional)', type: 'text' },
+  { key: 'isJoint', label: 'This is the main Joint account', type: 'checkbox' },
+];
 const ONE_TIME_EXPENSE_FIELDS = [
   { key: 'date', label: 'Date', type: 'date' },
   { key: 'item', label: 'Item', type: 'text' },
@@ -2644,7 +2862,7 @@ const EXPENSE_FIELDS = [
   { key: 'category', label: 'Category (e.g. Housing, Utilities)', type: 'text' },
   { key: 'amount', label: 'Amount', type: 'number' },
   { key: 'dueDay', label: 'Due Day of Month (1-31, for calendar)', type: 'number' },
-  { key: 'personalAccount', label: 'Paid From Personal Account (not joint)', type: 'checkbox' },
+  { key: 'paidFromAccountId', label: 'Paid From', type: 'fundingAccountSelect' },
 ];
 const SEMIMONTHLY_EXPENSE_FIELDS = [
   { key: 'item', label: 'Item', type: 'text' },
@@ -2652,7 +2870,7 @@ const SEMIMONTHLY_EXPENSE_FIELDS = [
   { key: 'amount', label: 'Amount (per occurrence)', type: 'number' },
   { key: 'dueDay', label: 'First Due Day (1-31)', type: 'number' },
   { key: 'dueDay2', label: 'Second Due Day (1-31)', type: 'number' },
-  { key: 'personalAccount', label: 'Paid From Personal Account (not joint)', type: 'checkbox' },
+  { key: 'paidFromAccountId', label: 'Paid From', type: 'fundingAccountSelect' },
 ];
 const BIWEEKLY_EXPENSE_FIELDS = [
   { key: 'item', label: 'Item', type: 'text' },
@@ -2686,6 +2904,10 @@ function fieldInputHTML(f, value) {
   }
   if (f.type === 'accountSelect') {
     return `<select id="f_${f.key}" class="account-select"><option value="" ${!v ? 'selected' : ''}>— None —</option>${accounts.map(a =>
+      `<option value="${a.id}" ${v === a.id ? 'selected' : ''}>${a.name}</option>`).join('')}</select>`;
+  }
+  if (f.type === 'fundingAccountSelect') {
+    return `<select id="f_${f.key}" class="funding-account-select"><option value="">— Default (Joint) —</option>${fundingAccounts.map(a =>
       `<option value="${a.id}" ${v === a.id ? 'selected' : ''}>${a.name}</option>`).join('')}</select>`;
   }
   if (f.type === 'checkbox') {
@@ -2836,7 +3058,11 @@ function renderAccounts() {
         return `
         <tr style="cursor:pointer;${isSelected ? 'background:rgba(168,118,62,.18);' : ''}" onclick="selectTrendAccount('${a.id}')">
           <td>${a.owner || '—'}</td>
-          <td>${a.name || '—'}${isSelected ? ' <span class="stamp brass">Trending</span>' : ''}</td>
+          <td>${a.name || '—'}${isSelected ? ' <span class="stamp brass">Trending</span>' : ''}${(() => {
+            const joint = getJointAccount();
+            const paidFrom = fundingAccounts.find(fa => fa.id === resolveFundingAccountId(a));
+            return paidFrom && (!joint || paidFrom.id !== joint.id) ? ` <span class="stamp brass">${paidFrom.name}</span>` : '';
+          })()}</td>
           <td>${a.type || '—'}</td>
           <td>${a.inProgram ? '<span class="stamp green">In Program</span>' : '—'}</td>
           <td class="num">${fmtMoney(a.balance)}${bal <= 0 ? ' <span class="stamp green">Debt-Free</span>' : ''}</td>
@@ -3156,8 +3382,11 @@ function expenseTableHTML(rows, frequency, tableKey, renderFn) {
     </tr></thead><tbody>
       ${rows.map(e => {
         const acct = e.accountId ? accounts.find(a => a.id === e.accountId) : null;
+        const joint = getJointAccount();
+        const paidFrom = fundingAccounts.find(fa => fa.id === resolveFundingAccountId(e));
+        const showPaidFrom = paidFrom && (!joint || paidFrom.id !== joint.id);
         return `<tr>
-          <td>${e.item || '—'}${e.personalAccount ? ' <span class="stamp brass">Personal</span>' : ''}</td>
+          <td>${e.item || '—'}${showPaidFrom ? ` <span class="stamp brass">${paidFrom.name}</span>` : ''}</td>
           <td>${e.category || '—'}</td>
           <td class="num">${fmtMoney(e.amount)}</td>
           ${showDueDays ? `<td>${e.dueDay || '—'} &amp; ${e.dueDay2 || '—'}</td>` : ''}
@@ -3552,6 +3781,10 @@ function mapRows(target, rawRows) {
         const ownerFilter = ownerSel ? ownerSel.value.trim().toLowerCase() : '';
         const pool = ownerFilter ? accounts.filter(a => (a.owner || '').trim().toLowerCase() === ownerFilter) : accounts;
         const match = pool.find(a => a.name && String(val).trim().toLowerCase() === a.name.trim().toLowerCase());
+        val = match ? match.id : '';
+      }
+      else if (f.type === 'fundingAccountSelect') {
+        const match = fundingAccounts.find(a => a.name && String(val).trim().toLowerCase() === a.name.trim().toLowerCase());
         val = match ? match.id : '';
       }
       row[f.key] = val;
