@@ -2800,6 +2800,7 @@ window.saveDefaultCard = async function () {
 const ACCOUNT_FIELDS = [
   { key: 'owner', label: 'Owner', type: 'text' },
   { key: 'name', label: 'Card / Loan Name', type: 'text' },
+  { key: 'paidFromAccountId', label: 'Paid From', type: 'fundingAccountSelect' },
   {
     key: 'type', label: 'Type', type: 'select',
     options: ['card', 'consolidation', 'studentloan', 'personalloan'],
@@ -2822,7 +2823,6 @@ const ACCOUNT_FIELDS = [
   { key: 'promoAPRDate', label: '0% APR End Date', type: 'date' },
   { key: 'creditLimit', label: 'Credit Limit', type: 'number' },
   { key: 'minPayment', label: 'Minimum Payment', type: 'number' },
-  { key: 'paidFromAccountId', label: 'Paid From', type: 'fundingAccountSelect' },
 ];
 const BALANCE_HISTORY_FIELDS = [
   { key: 'accountId', label: 'Card / Loan', type: 'accountSelect' },
@@ -2859,18 +2859,18 @@ const ONE_TIME_EXPENSE_FIELDS = [
 ];
 const EXPENSE_FIELDS = [
   { key: 'item', label: 'Item', type: 'text' },
+  { key: 'paidFromAccountId', label: 'Paid From', type: 'fundingAccountSelect' },
   { key: 'category', label: 'Category (e.g. Housing, Utilities)', type: 'text' },
   { key: 'amount', label: 'Amount', type: 'number' },
   { key: 'dueDay', label: 'Due Day of Month (1-31, for calendar)', type: 'number' },
-  { key: 'paidFromAccountId', label: 'Paid From', type: 'fundingAccountSelect' },
 ];
 const SEMIMONTHLY_EXPENSE_FIELDS = [
   { key: 'item', label: 'Item', type: 'text' },
+  { key: 'paidFromAccountId', label: 'Paid From', type: 'fundingAccountSelect' },
   { key: 'category', label: 'Category (e.g. Housing, Utilities)', type: 'text' },
   { key: 'amount', label: 'Amount (per occurrence)', type: 'number' },
   { key: 'dueDay', label: 'First Due Day (1-31)', type: 'number' },
   { key: 'dueDay2', label: 'Second Due Day (1-31)', type: 'number' },
-  { key: 'paidFromAccountId', label: 'Paid From', type: 'fundingAccountSelect' },
 ];
 const BIWEEKLY_EXPENSE_FIELDS = [
   { key: 'item', label: 'Item', type: 'text' },
