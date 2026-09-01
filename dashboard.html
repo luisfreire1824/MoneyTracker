@@ -531,6 +531,7 @@
 
   <nav class="tabs" id="tabNav">
     <button data-tab="dashboard" class="active">Dashboard</button>
+    <button data-tab="review">Review</button>
     <button data-tab="debt">Debt &amp; Cards</button>
     <button data-tab="money">Income &amp; Expenses</button>
     <button data-tab="projects">Projects</button>
@@ -540,64 +541,7 @@
   <main>
     <!-- ---------- DASHBOARD ---------- -->
     <section id="tab-dashboard" class="tab-content active">
-      <div id="signOffBanner"></div>
-      <div id="milestoneBanner"></div>
-
       <div class="card-row" id="dashboardCards"></div>
-
-      <div class="panel">
-        <div class="toolbar">
-          <h2 style="margin:0;" id="next7Heading">Next 15 Days</h2>
-          <button class="btn-ghost btn" id="next7RangeToggle" onclick="toggleNext7Range()">Show 30 Days</button>
-        </div>
-        <p class="panel-sub">Bills, card due dates, and income hitting soon — use this to gauge what's coming out of the account before setting pay amounts below.</p>
-        <div id="next7Table" class="table-wrap"></div>
-      </div>
-
-      <div class="panel" id="signOffReviewPanel">
-        <h2>Biweekly Card Review</h2>
-        <p class="panel-sub">Enter each card's balance, minimum due, and when it's due. Suggested Payment updates live as you type, based on the paydown priority below plus this card's expected charges before the next review — Amount to Pay is yours to set or override before signing off.</p>
-        <div class="toolbar">
-          <div class="filters">
-            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Review date:
-              <input type="date" id="signOffDate" style="margin-left:6px;">
-            </label>
-            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Whose cards:
-              <select id="signOffOwnerFilter" onchange="renderSignOffReview()" style="margin-left:6px;">
-                <option value="">Both</option>
-              </select>
-            </label>
-          </div>
-          <span id="signOffPoolLabel" style="font-size:12.5px;color:var(--ink-soft);"></span>
-        </div>
-        <div class="toolbar">
-          <div class="filters" id="fundingAccountBalances"></div>
-        </div>
-        <div class="toolbar">
-          <div class="filters">
-            <label id="signOffAddCardWrap" style="text-transform:none;letter-spacing:0;font-size:12px;">
-              <select id="signOffAddCard" onchange="addSignOffCard(this.value)"><option value="">+ Add a card…</option></select>
-            </label>
-            <a href="#" id="signOffResetAdded" onclick="resetSignOffAdded(); return false;" style="font-size:12px;color:var(--ink-soft);display:none;">Reset to cards with a balance</a>
-          </div>
-        </div>
-        <div class="toolbar">
-          <div class="filters">
-            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Review schedule, days of month:
-              <input type="number" id="reviewDay1Input" min="1" max="31" style="width:55px;margin-left:6px;">
-              <input type="number" id="reviewDay2Input" min="1" max="31" style="width:55px;">
-            </label>
-            <button class="btn-ghost btn" onclick="saveReviewSchedule()">Save Schedule</button>
-          </div>
-        </div>
-        <div id="signOffTable" class="table-wrap"></div>
-        <div id="reviewSummary" style="margin-top:10px;"></div>
-        <p class="panel-sub" style="margin-top:10px;">Save keeps your progress without touching anything else in the app. Only Sign Off updates account balances, locks the entries into history, and reflects everywhere else.</p>
-        <div style="margin-top:14px;" id="signOffActionBar">
-          <button class="btn-ghost btn" onclick="saveSignOffDraft()">Save</button>
-          <button class="btn" onclick="confirmSignOff()">Sign Off</button>
-        </div>
-      </div>
 
       <div class="panel">
         <h2>Debt Paydown Plan</h2>
@@ -656,6 +600,66 @@
         <div id="totalDebtStats" class="table-wrap"></div>
         <p class="panel-sub">Household-wide total, logged automatically each month, with a 3-month rolling average.</p>
         <canvas id="totalDebtChart" height="90"></canvas>
+      </div>
+    </section>
+
+    <!-- ---------- REVIEW ---------- -->
+    <section id="tab-review" class="tab-content">
+      <div id="signOffBanner"></div>
+      <div id="milestoneBanner"></div>
+
+      <div class="panel">
+        <div class="toolbar">
+          <h2 style="margin:0;" id="next7Heading">Next 15 Days</h2>
+          <button class="btn-ghost btn" id="next7RangeToggle" onclick="toggleNext7Range()">Show 30 Days</button>
+        </div>
+        <p class="panel-sub">Bills, card due dates, and income hitting soon — use this to gauge what's coming out of the account before setting pay amounts below.</p>
+        <div id="next7Table" class="table-wrap"></div>
+      </div>
+
+      <div class="panel" id="signOffReviewPanel">
+        <h2>Biweekly Card Review</h2>
+        <p class="panel-sub">Enter each card's balance, minimum due, and when it's due. Suggested Payment updates live as you type, based on the paydown priority below plus this card's expected charges before the next review — Amount to Pay is yours to set or override before signing off.</p>
+        <div class="toolbar">
+          <div class="filters">
+            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Review date:
+              <input type="date" id="signOffDate" style="margin-left:6px;">
+            </label>
+            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Whose cards:
+              <select id="signOffOwnerFilter" onchange="renderSignOffReview()" style="margin-left:6px;">
+                <option value="">Both</option>
+              </select>
+            </label>
+          </div>
+          <span id="signOffPoolLabel" style="font-size:12.5px;color:var(--ink-soft);"></span>
+        </div>
+        <div class="toolbar">
+          <div class="filters" id="fundingAccountBalances"></div>
+        </div>
+        <div class="toolbar">
+          <div class="filters">
+            <label id="signOffAddCardWrap" style="text-transform:none;letter-spacing:0;font-size:12px;">
+              <select id="signOffAddCard" onchange="addSignOffCard(this.value)"><option value="">+ Add a card…</option></select>
+            </label>
+            <a href="#" id="signOffResetAdded" onclick="resetSignOffAdded(); return false;" style="font-size:12px;color:var(--ink-soft);display:none;">Reset to cards with a balance</a>
+          </div>
+        </div>
+        <div class="toolbar">
+          <div class="filters">
+            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Review schedule, days of month:
+              <input type="number" id="reviewDay1Input" min="1" max="31" style="width:55px;margin-left:6px;">
+              <input type="number" id="reviewDay2Input" min="1" max="31" style="width:55px;">
+            </label>
+            <button class="btn-ghost btn" onclick="saveReviewSchedule()">Save Schedule</button>
+          </div>
+        </div>
+        <div id="signOffTable" class="table-wrap"></div>
+        <div id="reviewSummary" style="margin-top:10px;"></div>
+        <p class="panel-sub" style="margin-top:10px;">Save keeps your progress without touching anything else in the app. Only Sign Off updates account balances, locks the entries into history, and reflects everywhere else.</p>
+        <div style="margin-top:14px;" id="signOffActionBar">
+          <button class="btn-ghost btn" onclick="saveSignOffDraft()">Save</button>
+          <button class="btn" onclick="confirmSignOff()">Sign Off</button>
+        </div>
       </div>
     </section>
 
@@ -1798,12 +1802,17 @@ window.recomputeSignOffSuggestions = function (idsToSeed) {
 // card payments for any card tagged to it — with the underlying line
 // items kept so the total can be traced back to exactly what makes it up.
 // Excludes anything marked "already reflected" (autopaid before this
-// review), same as the Joint bills calc.
+// review), same as the Joint bills calc. The actual transferNeeded is the
+// SHORTFALL — obligations plus the reserve buffer, minus whatever's
+// already sitting in the account — not just the raw obligations total.
+// An account that already has enough on hand doesn't need a transfer.
 function getTransferNeeds() {
   const joint = getJointAccount();
   const others = fundingAccounts.filter(a => !joint || a.id !== joint.id);
   const allBills = generateUpcomingEvents(14).filter(e => e.type === 'expense');
   const eligibleCards = accounts.filter(a => !a.inProgram);
+  const bufferEl = document.getElementById('overdraftBufferInput');
+  const buffer = bufferEl && bufferEl.value !== '' ? Number(bufferEl.value) : (settings.overdraftBuffer ?? 300);
 
   return others.map(acct => {
     const expenseItems = allBills
@@ -1820,13 +1829,17 @@ function getTransferNeeds() {
       })
       .filter(Boolean);
 
-    const total = [...expenseItems, ...cardItems].reduce((s, i) => s + i.amount, 0);
-    return { account: acct, expenseItems, cardItems, total };
-  }).filter(t => t.total > 0 || t.expenseItems.length > 0 || t.cardItems.length > 0);
+    const obligations = [...expenseItems, ...cardItems].reduce((s, i) => s + i.amount, 0);
+    const balVal = getFundingAccountBalanceValue(acct.id);
+    const balanceEntered = balVal !== '';
+    const balance = balanceEntered ? Number(balVal) : 0; // no balance entered yet — assume $0, safest default
+    const transferNeeded = Math.max(obligations + buffer - balance, 0);
+    return { account: acct, expenseItems, cardItems, obligations, balance, balanceEntered, transferNeeded };
+  }).filter(t => t.obligations > 0 || t.expenseItems.length > 0 || t.cardItems.length > 0 || t.transferNeeded > 0);
 }
 
 function getTotalTransferAmount() {
-  return getTransferNeeds().reduce((s, t) => s + t.total, 0);
+  return getTransferNeeds().reduce((s, t) => s + t.transferNeeded, 0);
 }
 
 // Lists each upcoming joint bill occurrence with a checkbox — checking one
@@ -1880,8 +1893,8 @@ window.recomputeReviewSummary = function () {
 
   const bufferEl = document.getElementById('overdraftBufferInput');
   const buffer = bufferEl && bufferEl.value !== '' ? Number(bufferEl.value) : (settings.overdraftBuffer ?? 300);
-  const transferNeeds = getTransferNeeds(); // per non-Joint account: {account, expenseItems, cardItems, total}
-  const totalTransfer = transferNeeds.reduce((s, t) => s + t.total, 0);
+  const transferNeeds = getTransferNeeds(); // per non-Joint account: {account, expenseItems, cardItems, obligations, transferNeeded}
+  const totalTransfer = transferNeeds.reduce((s, t) => s + t.transferNeeded, 0);
   const upcomingJointBills = getUpcomingJointBills();
 
   const jointBalVal = joint ? getFundingAccountBalanceValue(joint.id) : '';
@@ -1909,15 +1922,20 @@ window.recomputeReviewSummary = function () {
         </div>`;
     }
     const need = transferNeeds.find(t => t.account.id === acct.id);
-    const total = need ? need.total : 0;
-    const remaining = balance !== null ? balance - total : null;
+    const obligations = need ? need.obligations : 0;
+    const transferNeeded = need ? need.transferNeeded : 0;
+    // Remaining after the transfer arrives (if one's needed) — this is
+    // what actually lands in the account once Joint sends what's short,
+    // not just balance-minus-obligations on its own.
+    const remaining = balance !== null ? balance + transferNeeded - obligations : null;
     const belowBuffer = remaining !== null && remaining < buffer;
     const items = need ? [...need.expenseItems, ...need.cardItems] : [];
     return `
       <div class="summary-row"><span>${acct.name} Balance <em>as entered</em></span><strong>${balance !== null ? fmtMoney(balance) : '—'}</strong></div>
-      <div class="summary-row"><span>&nbsp;&nbsp;− Obligations this cycle ${items.length ? `<details style="display:inline;"><summary style="display:inline;cursor:pointer;color:var(--brass-dark);">(${items.length} item${items.length === 1 ? '' : 's'} — tap to see)</summary><div style="margin-top:4px;">${items.map(i => `${i.label || (i.type === 'card' ? 'Card payment' : 'Bill')}: ${fmtMoney(i.amount)}`).join('<br>')}</div></details>` : '(none yet)'}</span><strong>${fmtMoney(total)}</strong></div>
+      <div class="summary-row"><span>&nbsp;&nbsp;− Obligations this cycle ${items.length ? `<details style="display:inline;"><summary style="display:inline;cursor:pointer;color:var(--brass-dark);">(${items.length} item${items.length === 1 ? '' : 's'} — tap to see)</summary><div style="margin-top:4px;">${items.map(i => `${i.label || (i.type === 'card' ? 'Card payment' : 'Bill')}: ${fmtMoney(i.amount)}`).join('<br>')}</div></details>` : '(none yet)'}</span><strong>${fmtMoney(obligations)}</strong></div>
+      ${transferNeeded > 0 ? `<div class="summary-row"><span>&nbsp;&nbsp;+ Transfer Needed From Joint <em>(to cover obligations and keep the $${buffer} reserve)</em></span><strong>${fmtMoney(transferNeeded)}</strong></div>` : ''}
       <div class="summary-row summary-row-final ${belowBuffer ? 'summary-row-warn' : ''}">
-        <span>&nbsp;&nbsp;= Remaining in ${acct.name} After ${total > (balance || 0) - buffer && balance !== null ? '<em>— needs a transfer from Joint</em>' : ''}</span>
+        <span>&nbsp;&nbsp;= Remaining in ${acct.name} After${transferNeeded > 0 ? ' Transfer' : ''}</span>
         <strong>${balance !== null ? fmtMoney(remaining) : '— enter balance above —'}${belowBuffer ? ` <span class="stamp">Below $${buffer} reserve</span>` : ''}</strong>
       </div>`;
   }).join('');
