@@ -551,7 +551,7 @@
             <label style="text-transform:none;letter-spacing:0;font-size:12px;">Extra $/month <span style="color:var(--ink-soft);">(auto)</span>:
               <input type="number" id="monthlyExtraInput" style="width:100px;margin-left:6px;background:var(--paper);" value="0" readonly>
             </label>
-            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Keep in account:
+            <label style="text-transform:none;letter-spacing:0;font-size:12px;">Keep in Joint account:
               <input type="number" id="overdraftBufferInput" style="width:80px;margin-left:6px;" value="300">
             </label>
             <label style="text-transform:none;letter-spacing:0;font-size:12px;">Split to debt:
@@ -1762,7 +1762,7 @@ window.recomputeSignOffSuggestions = function (idsToSeed) {
       const ownBills = generateUpcomingEvents(14)
         .filter(e => e.type === 'expense' && e.paidFromAccountId === acct.id && !signOffExcludedBills.has(getBillKey(e)))
         .reduce((s, e) => s + (Number(e.amount) || 0), 0);
-      room = balance - ownBills - totalMinimums - buffer;
+      room = balance - ownBills - totalMinimums; // no reserve requirement — only Joint keeps a buffer
     }
     let scale = 1;
     if (totalAboveMin > 0 && room < totalAboveMin) { scale = Math.max(room, 0) / totalAboveMin; anyTrimmed = true; }
@@ -1776,8 +1776,10 @@ window.recomputeSignOffSuggestions = function (idsToSeed) {
     totalSuggested += suggestedTotal;
     const suggestEl = document.getElementById('signoff_suggest_' + r.id);
     if (suggestEl) {
+      const isJointRow = joint && r.fundingAccountId === joint.id;
+      const trimNote = isJointRow ? `trimmed to protect $${buffer} reserve` : `trimmed — not enough available in the paying account`;
       suggestEl.innerHTML = fmtMoney(suggestedTotal)
-        + (scale < 1 ? ` <span style="color:var(--rust);font-size:11px;">(trimmed to protect $${buffer} reserve)</span>` : '');
+        + (scale < 1 ? ` <span style="color:var(--rust);font-size:11px;">(${trimNote})</span>` : '');
     }
     if (seedSet.has(r.id)) {
       const payEl = document.getElementById('signoff_pay_' + r.id);
@@ -1792,7 +1794,7 @@ window.recomputeSignOffSuggestions = function (idsToSeed) {
   const usingRealBalance = jointBalVal !== '';
   if (poolLabel) {
     poolLabel.textContent = anyTrimmed
-      ? `Some cards' extra payments were trimmed — the real account balance can't cover the full suggested extra while keeping the $${buffer} reserve.`
+      ? `Some cards' extra payments were trimmed — the paying account's real balance can't cover the full suggested extra (Joint also keeps a $${buffer} reserve).`
       : `Suggested extra pool this period: ${fmtMoney(periodExtra)} (${usingRealBalance ? 'based on the joint balance you entered' : 'monthly-average estimate — enter a joint balance for a real number'}; cards outside the pool still get a modest buffer above minimum)`;
   }
 };
@@ -1811,8 +1813,6 @@ function getTransferNeeds() {
   const others = fundingAccounts.filter(a => !joint || a.id !== joint.id);
   const allBills = generateUpcomingEvents(14).filter(e => e.type === 'expense');
   const eligibleCards = accounts.filter(a => !a.inProgram);
-  const bufferEl = document.getElementById('overdraftBufferInput');
-  const buffer = bufferEl && bufferEl.value !== '' ? Number(bufferEl.value) : (settings.overdraftBuffer ?? 300);
 
   return others.map(acct => {
     const expenseItems = allBills
@@ -1833,7 +1833,7 @@ function getTransferNeeds() {
     const balVal = getFundingAccountBalanceValue(acct.id);
     const balanceEntered = balVal !== '';
     const balance = balanceEntered ? Number(balVal) : 0; // no balance entered yet — assume $0, safest default
-    const transferNeeded = Math.max(obligations + buffer - balance, 0);
+    const transferNeeded = Math.max(obligations - balance, 0);
     return { account: acct, expenseItems, cardItems, obligations, balance, balanceEntered, transferNeeded };
   }).filter(t => t.obligations > 0 || t.expenseItems.length > 0 || t.cardItems.length > 0 || t.transferNeeded > 0);
 }
@@ -1928,15 +1928,18 @@ window.recomputeReviewSummary = function () {
     // what actually lands in the account once Joint sends what's short,
     // not just balance-minus-obligations on its own.
     const remaining = balance !== null ? balance + transferNeeded - obligations : null;
-    const belowBuffer = remaining !== null && remaining < buffer;
+    // Only Joint keeps a reserve requirement — a personal account landing
+    // at exactly $0 after covering its own obligations is expected and
+    // fine, not a warning. This only flags true overdraft.
+    const overdrawn = remaining !== null && remaining < 0;
     const items = need ? [...need.expenseItems, ...need.cardItems] : [];
     return `
       <div class="summary-row"><span>${acct.name} Balance <em>as entered</em></span><strong>${balance !== null ? fmtMoney(balance) : '—'}</strong></div>
       <div class="summary-row"><span>&nbsp;&nbsp;− Obligations this cycle ${items.length ? `<details style="display:inline;"><summary style="display:inline;cursor:pointer;color:var(--brass-dark);">(${items.length} item${items.length === 1 ? '' : 's'} — tap to see)</summary><div style="margin-top:4px;">${items.map(i => `${i.label || (i.type === 'card' ? 'Card payment' : 'Bill')}: ${fmtMoney(i.amount)}`).join('<br>')}</div></details>` : '(none yet)'}</span><strong>${fmtMoney(obligations)}</strong></div>
-      ${transferNeeded > 0 ? `<div class="summary-row"><span>&nbsp;&nbsp;+ Transfer Needed From Joint <em>(to cover obligations and keep the $${buffer} reserve)</em></span><strong>${fmtMoney(transferNeeded)}</strong></div>` : ''}
-      <div class="summary-row summary-row-final ${belowBuffer ? 'summary-row-warn' : ''}">
+      ${transferNeeded > 0 ? `<div class="summary-row"><span>&nbsp;&nbsp;+ Transfer Needed From Joint <em>(to cover this account's obligations)</em></span><strong>${fmtMoney(transferNeeded)}</strong></div>` : ''}
+      <div class="summary-row summary-row-final ${overdrawn ? 'summary-row-warn' : ''}">
         <span>&nbsp;&nbsp;= Remaining in ${acct.name} After${transferNeeded > 0 ? ' Transfer' : ''}</span>
-        <strong>${balance !== null ? fmtMoney(remaining) : '— enter balance above —'}${belowBuffer ? ` <span class="stamp">Below $${buffer} reserve</span>` : ''}</strong>
+        <strong>${balance !== null ? fmtMoney(remaining) : '— enter balance above —'}${overdrawn ? ` <span class="stamp">Overdrawn</span>` : ''}</strong>
       </div>`;
   }).join('');
 
