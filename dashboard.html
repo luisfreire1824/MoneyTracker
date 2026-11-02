@@ -369,6 +369,33 @@
   .summary-row-final span, .summary-row-final strong{font-weight:600;}
   .summary-row-warn, .summary-row-warn span, .summary-row-warn strong{color:var(--rust);}
 
+  /* Simple / Full review view */
+  .view-switch{display:inline-flex;border:1px solid var(--line);border-radius:3px;overflow:hidden;}
+  .view-switch button{border:0;background:var(--paper-raised);padding:7px 16px;font:600 12.5px var(--sans);color:var(--ink-soft);cursor:pointer;}
+  .view-switch button.active{background:var(--ink);color:var(--paper-raised);}
+  #simpleTimeline{display:none;margin:6px 0 14px;}
+  #tab-review.review-simple #simpleTimeline{display:block;}
+  #tab-review.review-simple #next7Panel,
+  #tab-review.review-simple .col-suggest,
+  #tab-review.review-simple #signOffPoolLabel,
+  #tab-review.review-simple #reviewScheduleBar,
+  #tab-review.review-simple #reviewSummary,
+  #tab-review.review-simple #fullOnlyNote{display:none !important;}
+  .tl-row{display:grid;grid-template-columns:92px 1fr 100px 110px;gap:10px;align-items:baseline;padding:8px 14px;border-bottom:1px solid var(--line);font-size:13.5px;}
+  .tl-row:last-child{border-bottom:none;}
+  .tl-row.tl-head{font-size:11.5px;color:var(--ink-soft);background:var(--paper-raised);font-weight:600;}
+  .tl-row .num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap;}
+  .tl-row.tl-start,.tl-row.tl-end{background:var(--paper-raised);font-weight:600;}
+  .tl-in .amt{color:var(--green);}
+  .tl-low{color:var(--rust);font-weight:600;}
+  .tl-row label{font-size:11.5px;color:var(--ink-soft);display:inline-flex;gap:4px;align-items:center;margin-left:8px;white-space:nowrap;}
+  .tl-xfer{background:rgba(168,118,62,.10);}
+  @media (max-width:640px){
+    .tl-row{grid-template-columns:62px 1fr 84px;padding:8px 10px;font-size:13px;}
+    .tl-row .bal{grid-column:2 / 4;text-align:right;font-size:11.5px;color:var(--ink-soft);}
+    .tl-row.tl-head .bal{display:none;}
+  }
+
   .table-wrap{
     overflow-x:auto;
     -webkit-overflow-scrolling:touch;
@@ -608,7 +635,14 @@
       <div id="signOffBanner"></div>
       <div id="milestoneBanner"></div>
 
-      <div class="panel">
+      <div class="toolbar" style="margin-bottom:10px;">
+        <div class="view-switch" role="group" aria-label="Review view">
+          <button type="button" id="viewSimpleBtn" onclick="setReviewMode('simple')">Simple</button>
+          <button type="button" id="viewFullBtn" onclick="setReviewMode('full')">Full</button>
+        </div>
+      </div>
+
+      <div class="panel" id="next7Panel">
         <div class="toolbar">
           <h2 style="margin:0;" id="next7Heading">Next 15 Days</h2>
           <button class="btn-ghost btn" id="next7RangeToggle" onclick="toggleNext7Range()">Show 30 Days</button>
@@ -644,7 +678,8 @@
             <a href="#" id="signOffResetAdded" onclick="resetSignOffAdded(); return false;" style="font-size:12px;color:var(--ink-soft);display:none;">Reset to cards with a balance</a>
           </div>
         </div>
-        <div class="toolbar">
+        <div id="simpleTimeline"></div>
+        <div class="toolbar" id="reviewScheduleBar">
           <div class="filters">
             <label style="text-transform:none;letter-spacing:0;font-size:12px;">Review schedule, days of month:
               <input type="number" id="reviewDay1Input" min="1" max="31" style="width:55px;margin-left:6px;">
@@ -1571,6 +1606,7 @@ function renderSignOffReview() {
   const dateEl = document.getElementById('signOffDate');
   const ownerSel = document.getElementById('signOffOwnerFilter');
   if (!tableEl || !dateEl || !ownerSel) return;
+  applyReviewMode();
   if (!dateEl.value) dateEl.value = (reviewDraft && reviewDraft.date) || new Date().toISOString().slice(0, 10);
   renderFundingAccountBalances();
 
@@ -1629,7 +1665,7 @@ function renderSignOffReview() {
     <table class="ledger">
       <thead><tr>
         <th>Card</th><th class="num">Balance</th><th class="num">Minimum Due</th>
-        <th>Due Date</th><th class="num">Suggested Payment</th><th class="num">Amount to Pay</th>
+        <th>Due Date</th><th class="num col-suggest">Suggested Payment</th><th class="num">Amount to Pay</th>
       </tr></thead>
       <tbody>
         ${displayed.map(a => {
@@ -1645,8 +1681,8 @@ function renderSignOffReview() {
             <td class="num" data-label="Balance"><input type="number" id="signoff_bal_${a.id}" value="${balVal}" style="width:100%;max-width:140px;text-align:right;" oninput="recomputeSignOffSuggestions(); recomputeReviewSummary();"></td>
             <td class="num" data-label="Minimum Due"><input type="number" id="signoff_min_${a.id}" value="${minVal}" style="width:100%;max-width:140px;text-align:right;" oninput="recomputeSignOffSuggestions(); recomputeReviewSummary();"></td>
             <td data-label="Due Date"><input type="date" id="signoff_due_${a.id}" value="${dueVal}" style="width:100%;max-width:160px;"></td>
-            <td class="num" data-label="Suggested Payment" id="signoff_suggest_${a.id}">—</td>
-            <td class="num" data-label="Amount to Pay"><input type="number" id="signoff_pay_${a.id}" value="${payVal}" style="width:100%;max-width:140px;text-align:right;" oninput="recomputeReviewSummary()"></td>
+            <td class="num col-suggest" data-label="Suggested Payment" id="signoff_suggest_${a.id}">—</td>
+            <td class="num" data-label="Amount to Pay"><input type="number" id="signoff_pay_${a.id}" value="${payVal}" style="width:100%;max-width:140px;text-align:right;" onfocus="this.select()" oninput="recomputeReviewSummary()"></td>
           </tr>`;
         }).join('')}
       </tbody>
@@ -1781,7 +1817,7 @@ window.recomputeSignOffSuggestions = function (idsToSeed) {
       suggestEl.innerHTML = fmtMoney(suggestedTotal)
         + (scale < 1 ? ` <span style="color:var(--rust);font-size:11px;">(${trimNote})</span>` : '');
     }
-    if (seedSet.has(r.id)) {
+    if (seedSet.has(r.id) && reviewMode === 'full') {
       const payEl = document.getElementById('signoff_pay_' + r.id);
       if (payEl) payEl.value = suggestedTotal.toFixed(2);
     }
@@ -1870,6 +1906,128 @@ window.toggleReflectedBill = function (key) {
   recomputeReviewSummary();
 };
 
+
+/* ---------------- SIMPLE REVIEW VIEW ---------------- */
+// A plain, spreadsheet-style read of the next 14 days: start from the Joint
+// balance you typed, add income, subtract bills and the card payments you
+// entered, and show the running balance after each line. No suggestions —
+// you type what to pay. Sign Off / Save behave exactly as in the Full view.
+let reviewMode = 'simple';
+try { const m = localStorage.getItem('reviewMode'); if (m === 'full' || m === 'simple') reviewMode = m; } catch (e) {}
+
+window.setReviewMode = function (mode) {
+  reviewMode = mode === 'full' ? 'full' : 'simple';
+  try { localStorage.setItem('reviewMode', reviewMode); } catch (e) {}
+  applyReviewMode();
+  if (reviewMode === 'full') recomputeSignOffSuggestions(new Set());
+  recomputeReviewSummary();
+};
+
+function applyReviewMode() {
+  const tab = document.getElementById('tab-review');
+  if (tab) tab.classList.toggle('review-simple', reviewMode === 'simple');
+  const sb = document.getElementById('viewSimpleBtn'), fb = document.getElementById('viewFullBtn');
+  if (sb) sb.classList.toggle('active', reviewMode === 'simple');
+  if (fb) fb.classList.toggle('active', reviewMode === 'full');
+}
+
+window.toggleTimelineBill = function (key) {
+  if (signOffExcludedBills.has(key)) signOffExcludedBills.delete(key);
+  else signOffExcludedBills.add(key);
+  recomputeReviewSummary();
+};
+
+const tlDate = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+// Pure builder so the math can be tested without the DOM.
+function buildTimeline({ startBalance, events, payments, transfers, excluded, today }) {
+  const lines = [];
+  payments.forEach(p => { if (p.amount > 0) lines.push({ date: today, kind: 'pay', label: p.label, delta: -p.amount, order: 1 }); });
+  transfers.forEach(t => { if (t.amount > 0) lines.push({ date: today, kind: 'xfer', label: t.label, delta: -t.amount, order: 2 }); });
+  events.forEach(e => {
+    if (!e.amount) return;
+    if (e.type === 'income') lines.push({ date: e.date, kind: 'in', label: e.label || 'Income', delta: Number(e.amount), order: 0 });
+    else if (e.type === 'expense') {
+      const key = e.key;
+      lines.push({ date: e.date, kind: 'bill', label: e.label || 'Bill', delta: excluded.has(key) ? 0 : -Number(e.amount), amount: Number(e.amount), key, skipped: excluded.has(key), shifted: e.shifted, order: 3 });
+    }
+  });
+  lines.sort((a, b) => (a.date - b.date) || (a.order - b.order));
+  let bal = startBalance, low = { bal: startBalance, date: today };
+  lines.forEach(l => { bal += l.delta; l.balance = bal; if (bal < low.bal) low = { bal, date: l.date }; });
+  return { lines, end: bal, low };
+}
+
+function renderSimpleTimeline() {
+  const el = document.getElementById('simpleTimeline');
+  if (!el || reviewMode !== 'simple') return;
+  const joint = getJointAccount();
+  if (!joint) { el.innerHTML = `<div class="empty-state">Add a Joint account on the Income &amp; Expenses tab to see the timeline.</div>`; return; }
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const jointVal = getFundingAccountBalanceValue(joint.id);
+  const buffer = settings.overdraftBuffer ?? 300;
+  const eligible = accounts.filter(a => !a.inProgram);
+
+  // Card payments the person typed, split by which account pays them.
+  const payments = [];
+  eligible.forEach(a => {
+    if (getSignOffFieldValue(a.id, 'bal') === '') return; // same skip rule as Sign Off
+    const amt = Number(getSignOffFieldValue(a.id, 'pay')) || 0;
+    if (amt > 0 && resolveFundingAccountId(a) === joint.id) {
+      const due = getSignOffFieldValue(a.id, 'due');
+      payments.push({ label: `Pay ${a.name}${due ? ' (due ' + tlDate(new Date(due + 'T00:00:00')) + ')' : ''}`, amount: amt });
+    }
+  });
+  const otherPays = eligible.filter(a => resolveFundingAccountId(a) !== joint.id && getSignOffFieldValue(a.id, 'bal') !== '' && (Number(getSignOffFieldValue(a.id, 'pay')) || 0) > 0);
+
+  const transferNeeds = getTransferNeeds();
+  const transfers = transferNeeds.filter(t => t.transferNeeded > 0)
+    .map(t => ({ label: `Transfer to ${t.account.name}`, amount: t.transferNeeded }));
+
+  const events = generateUpcomingEvents(14).filter(e => e.amount && (e.type === 'income' || (e.type === 'expense' && e.paidFromAccountId === joint.id)))
+    .map(e => ({ ...e, key: e.type === 'expense' ? getBillKey(e) : null }));
+
+  const hasStart = jointVal !== '';
+  const t = buildTimeline({ startBalance: hasStart ? Number(jointVal) : 0, events, payments, transfers, excluded: signOffExcludedBills, today });
+
+  const rows = t.lines.map(l => {
+    const cls = l.kind === 'in' ? 'tl-in' : (l.kind === 'xfer' ? 'tl-xfer' : '');
+    const sign = l.kind === 'in' ? '+' : '−';
+    const amt = l.kind === 'bill' ? l.amount : Math.abs(l.delta);
+    const chk = l.kind === 'bill' ? `<label title="Already came out before you typed the balance"><input type="checkbox" ${l.skipped ? 'checked' : ''} onchange="toggleTimelineBill('${l.key}')">already paid</label>` : '';
+    const note = l.shifted ? ' <span style="color:var(--ink-soft);font-size:11px;">(moved from weekend)</span>' : '';
+    return `<div class="tl-row ${cls}" style="${l.skipped ? 'opacity:.5;' : ''}">
+      <span>${tlDate(l.date)}</span>
+      <span>${l.label}${note}${chk}</span>
+      <span class="num amt">${l.skipped ? '' : sign}${fmtMoney(amt)}</span>
+      <span class="num bal ${hasStart && l.balance < buffer ? 'tl-low' : ''}">${hasStart ? fmtMoney(l.balance) : '—'}</span>
+    </div>`;
+  }).join('');
+
+  const otherNote = otherPays.length
+    ? `<div class="tl-row" style="grid-template-columns:1fr;color:var(--ink-soft);font-size:12.5px;">Paid from other accounts (not in this list): ${otherPays.map(a => `${a.name} ${fmtMoney(Number(getSignOffFieldValue(a.id, 'pay')))}`).join(', ')}. Transfers above cover any shortfall.</div>` : '';
+
+  const aprCards = eligible.filter(a => (Number(a.balance) || 0) > 0).sort((x, y) => (Number(y.normalAPR) || 0) - (Number(x.normalAPR) || 0));
+  const hint = aprCards.length && Number(aprCards[0].normalAPR) > 0
+    ? `<p class="panel-sub" style="margin:8px 0 0;">Highest APR right now: <strong>${aprCards[0].name}</strong> (${aprCards[0].normalAPR}%).</p>` : '';
+
+  const warn = hasStart && t.low.bal < buffer
+    ? `<div class="summary-row summary-row-warn"><span>Lowest point: ${fmtMoney(t.low.bal)} on ${tlDate(t.low.date)} — under the ${fmtMoney(buffer)} reserve</span></div>` : '';
+
+  el.innerHTML = `
+    <h3 style="margin:4px 0 8px;font-size:15px;">Next 14 days — Joint account</h3>
+    <div class="summary-list">
+      <div class="tl-row tl-head"><span>Date</span><span>Item</span><span class="num">Amount</span><span class="num bal">Balance</span></div>
+      <div class="tl-row tl-start"><span>${tlDate(today)}</span><span>Joint balance (as entered)</span><span></span><span class="num bal">${hasStart ? fmtMoney(Number(jointVal)) : '—'}</span></div>
+      ${rows || '<div class="tl-row" style="grid-template-columns:1fr;color:var(--ink-soft);">Nothing scheduled yet — type amounts in the cards below.</div>'}
+      ${otherNote}
+      <div class="tl-row tl-end ${hasStart && t.end < buffer ? 'tl-low' : ''}"><span></span><span>Left in Joint after 14 days</span><span></span><span class="num bal">${hasStart ? fmtMoney(t.end) : 'enter balance above'}</span></div>
+      ${warn}
+    </div>
+    ${hint}`;
+}
+window.buildTimeline = buildTimeline;
+
 window.recomputeReviewSummary = function () {
   const el = document.getElementById('reviewSummary');
   if (!el) return;
@@ -1953,6 +2111,7 @@ window.recomputeReviewSummary = function () {
     </div>
     <div id="alreadyReflectedBills" style="margin-top:12px;"></div>`;
   renderAlreadyReflectedBillsChecklist();
+  renderSimpleTimeline();
 };
 
 // Saves current form state to a single shared draft doc — visible to
